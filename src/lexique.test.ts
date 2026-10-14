@@ -13,4 +13,9 @@ describe('lexique', () => {
     expect(parleDeChasse('arrêté portant ouverture de la chasse')).toBe(true)
     expect(parleDeChasse('arrêté portant réglementation de la pêche en eau douce')).toBe(false)
   })
+  it('cerf-volant et pie-grièche ne sont pas du gibier ; mois suivi d’une lettre : pas une date', () => {
+    expect(compterEspeces('un cerf-volant et une pie-grièche')).toBe(0)
+    expect(compterEspeces('un cerf, des pies')).toBe(2)
+    expect(compterDates('le 12 marsupilami 2026')).toBe(0)
+  })
 })

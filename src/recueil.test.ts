@@ -20,6 +20,27 @@ describe('lireSommaire', () => {
   })
   it('null si pas de sommaire', () => { expect(lireSommaire([page(1, 'ARRÊTÉ n° 1\nArticle 1 : bla')], 3)).toBeNull() })
 })
+describe('lireSommaire — robustesse', () => {
+  const lignes = (...l: string[]) => [page(1, l.join('\n'))]
+  const TROIS = ['Arrêté portant ouverture et clôture de la chasse ........ 3', 'Arrêté préfectoral portant réglementation de la pêche ..... 9', 'Arrêté portant attribution de la médaille d’honneur ..... 14']
+  it('(a) sans le mot SOMMAIRE : null', () => { expect(lireSommaire(lignes(...TROIS), 22)).toBeNull() })
+  it('(b) séparateur d’un seul espace', () => {
+    const a = lireSommaire(lignes('Sommaire', 'Arrêté relatif à la chasse du sanglier 3', 'Arrêté relatif à la pêche en rivière 9', 'Arrêté portant attribution de médaille 14'), 22)!
+    expect(a.map(x => x.pageDebut)).toEqual([3, 9, 14])
+  })
+  it('(c) titre sur deux lignes recollé ; en-tête de rubrique non recollé', () => {
+    const a = lireSommaire(lignes('SOMMAIRE', 'Préfecture / Cabinet', 'Arrêté n° 2026-DDTM-SE-123 portant ouverture et clôture de la', 'chasse pour la campagne 2026-2027 ........ 3', TROIS[1], TROIS[2]), 22)!
+    expect(a[0].titre).toBe('Arrêté n° 2026-DDTM-SE-123 portant ouverture et clôture de la chasse pour la campagne 2026-2027'); expect(a).toHaveLength(3)
+  })
+  it('(d) deux actes sur la même page : pageFin ≥ pageDebut', () => {
+    const a = lireSommaire(lignes('SOMMAIRE', TROIS[0], 'Arrêté modifiant la composition de la commission ..... 3', TROIS[1]), 22)!
+    expect(a.map(x => [x.pageDebut, x.pageFin])).toEqual([[3, 3], [3, 8], [9, 22]])
+  })
+  it('(e) numéro décroissant ignoré, les suivants conservés', () => {
+    const a = lireSommaire(lignes('SOMMAIRE', TROIS[0], 'Arrêté erroné de la préfecture de test ..... 2', TROIS[1], TROIS[2]), 22)!
+    expect(a.map(x => x.pageDebut)).toEqual([3, 9, 14])
+  })
+})
 describe('decouperParEntetes', () => {
   it('nouvel acte à chaque page avec en-tête ARRÊTÉ', () => {
     const pages = [page(1, 'PRÉFET\nARRÊTÉ PRÉFECTORAL N° 1\nVU…'), page(2, 'Article 2 …'), page(3, 'Arrêté n° 2 portant pêche\nVU…'), page(4, 'suite')]

@@ -10,3 +10,9 @@ export function saisonDepuisTexte(texte: string): string | null {
   while ((m = re.exec(texte))) { const a = +m[1], b = +m[2]; if (b === a + 1) return `${a}-${b}` }
   return null
 }
+// Toutes les saisons (paires d'années consécutives) citées, sans doublon, dans l'ordre du texte.
+export function saisonsDepuisTexte(texte: string): string[] {
+  const re = /\b(20\d\d)\s*[-–/]\s*(20\d\d)\b/g; const out = new Set<string>(); let m: RegExpExecArray | null
+  while ((m = re.exec(texte))) { const a = +m[1], b = +m[2]; if (b === a + 1) out.add(`${a}-${b}`) }
+  return [...out]
+}

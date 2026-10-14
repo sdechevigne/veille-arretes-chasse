@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { saisonDepuisDate, saisonDepuisTexte, saisonCourante } from './saison.ts'
+import { saisonDepuisDate, saisonDepuisTexte, saisonCourante, saisonsDepuisTexte } from './saison.ts'
 
 describe('saison', () => {
   it('bascule au 1er juillet', () => {
@@ -14,5 +14,8 @@ describe('saison', () => {
   })
   it('saisonCourante = saison de la date du jour', () => {
     expect(saisonCourante(new Date('2026-10-14'))).toBe('2026-2027')
+  })
+  it('saisonsDepuisTexte : toutes les paires consécutives, sans doublon', () => {
+    expect(saisonsDepuisTexte('2024-2025, 2025-2026 et 2026-2027 ; période 2020-2026 ; 2025-2026')).toEqual(['2024-2025', '2025-2026', '2026-2027'])
   })
 })

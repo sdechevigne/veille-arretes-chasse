@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { lirePage, qualitePage, qualiteDocument } from './pdf.ts'
+import { readFileSync } from 'node:fs'
+import { lirePage, qualitePage, qualiteDocument, run } from './pdf.ts'
+import { compterDates, compterEspeces } from './lexique.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { PageTexte } from './types.ts'
 
@@ -31,5 +33,34 @@ describe('qualité', () => {
     expect(qualiteDocument([page({ source: 'native' })])).toBe('native')
     expect(qualiteDocument([page({ nbDates: 2, nbEspeces: 1 })])).toBe('ocr_ok')
     expect(qualiteDocument([page({ nbDates: 2, nbEspeces: 0 })])).toBe('ocr_douteux')
+  })
+  it('agrégé : page en erreur, document vide, majorité de pages douteuses', () => {
+    expect(qualitePage(page({ source: 'erreur', texte: '' }))).toBe('douteux')
+    expect(qualiteDocument([])).toBe('ocr_douteux')
+    expect(qualiteDocument([page({ nbDates: 2, nbEspeces: 1 }), page({ source: 'erreur', texte: '' })])).toBe('ocr_douteux')
+    const bruit = page({ texte: long('mot') + ' ' + long('autre'), nbDates: 0, nbEspeces: 0 })
+    expect(qualiteDocument([bruit, bruit, page({ nbDates: 2, nbEspeces: 1 })])).toBe('ocr_douteux')
+    expect(qualiteDocument([bruit, page({ nbDates: 2, nbEspeces: 1 }), page({ nbDates: 1, nbEspeces: 2 })])).toBe('ocr_ok')
+    // Tableau OCR : des pages sans espèce à côté de pages qui en ont → document ok.
+    expect(qualiteDocument([page({ nbDates: 5, nbEspeces: 0 }), page({ nbDates: 1, nbEspeces: 3 }), page({ nbDates: 2, nbEspeces: 2 })])).toBe('ocr_ok')
+  })
+  it('textes réels 54 et 69 : ocr_ok', () => {
+    for (const f of ['54-ap', '69-fdc']) {
+      const j = JSON.parse(readFileSync(new URL(`./__fixtures__/${f}.texte.json`, import.meta.url), 'utf8'))
+      const pages: PageTexte[] = j.pages.map((p: { n: number; texte: string }) => ({ n: p.n, source: 'ocr', texte: p.texte, nbDates: compterDates(p.texte), nbEspeces: compterEspeces(p.texte) }))
+      expect(qualiteDocument(pages)).toBe('ocr_ok')
+    }
+  })
+})
+describe('run', () => {
+  it('délai dépassé : processus tué, rejet explicite', async () => {
+    await expect(run('node', ['-e', 'setTimeout(() => {}, 10000)'], 300)).rejects.toThrow(/node : délai dépassé/)
+  })
+  it('sortie UTF-8 volumineuse non corrompue', async () => {
+    const out = await run('node', ['-e', "process.stdout.write('é'.repeat(200000))"])
+    expect(out).toBe('é'.repeat(200000))
+  })
+  it('code de sortie non nul : rejet avec le message', async () => {
+    await expect(run('node', ['-e', "console.error('boum'); process.exit(3)"])).rejects.toThrow(/\(3\) : boum/)
   })
 })

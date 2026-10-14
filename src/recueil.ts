@@ -3,21 +3,35 @@ import { parleDeChasse } from './lexique.ts'
 import type { PageTexte } from './types.ts'
 
 export interface Acte { titre: string; pageDebut: number; pageFin: number; chasse: boolean }
-const RE_LIGNE_SOMMAIRE = /^(.{15,}?)[\s.…_-]{2,}(\d{1,3})\s*$/
+// Ligne de sommaire : titre, séparateur (points de suite, espaces, tirets…) puis numéro de page en fin de ligne.
+const RE_LIGNE_SOMMAIRE = /^(.+?)[\s.…_-]+(\d{1,3})\s*$/
+const RE_MOT_SOMMAIRE = /\bsommaire\b/
 const RE_ENTETE = /^\s*(ARR[ÊE]T[ÉE]\s*(PR[ÉE]FECTORAL|N\s*°|n\s*°|INTER)|Arr[êe]t[ée]\s+(n\s*°|pr[ée]fectoral|portant|relatif|modifiant))/im
+const sansAccents = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 
+// Lit le sommaire (lignes après le mot « SOMMAIRE »). Un titre sur deux lignes (la 2e commence en minuscule) est recollé ;
+// une entrée dont la page décroît est ignorée, les suivantes continuent.
 export function lireSommaire(pagesSommaire: PageTexte[], nbPagesTotal: number): Acte[] | null {
   const entrees: { titre: string; page: number }[] = []
+  let dansSommaire = false; let enAttente: string | null = null
   for (const p of pagesSommaire.slice(0, 6)) {
-    for (const ligne of p.texte.split('\n')) {
-      const m = RE_LIGNE_SOMMAIRE.exec(ligne.trim()); if (!m) continue
-      const page = +m[2]; if (page < 1 || page > nbPagesTotal) continue
-      if (entrees.length && page < entrees[entrees.length - 1].page) continue // ordre croissant exigé
-      entrees.push({ titre: m[1].replace(/[\s.…_-]+$/, '').trim(), page })
+    for (const brute of p.texte.split('\n')) {
+      const ligne = brute.trim()
+      if (!dansSommaire) { if (RE_MOT_SOMMAIRE.test(sansAccents(ligne).toLowerCase())) dansSommaire = true; continue }
+      if (!ligne) continue
+      const m = RE_LIGNE_SOMMAIRE.exec(ligne)
+      if (!m) { enAttente = enAttente && /^\p{Ll}/u.test(ligne) ? `${enAttente} ${ligne}` : ligne; continue }
+      let titre = m[1].replace(/[\s.…_-]+$/, '').trim()
+      if (enAttente && /^\p{Ll}/u.test(titre)) titre = `${enAttente} ${titre}`
+      enAttente = null
+      const page = +m[2]
+      if (titre.length < 15 || page < 1 || page > nbPagesTotal) continue
+      if (entrees.length && page < entrees[entrees.length - 1].page) continue
+      entrees.push({ titre, page })
     }
   }
   if (entrees.length < 3) return null
-  return entrees.map((e, i) => ({ titre: e.titre, pageDebut: e.page, pageFin: (entrees[i + 1]?.page ?? nbPagesTotal + 1) - 1, chasse: false }))
+  return entrees.map((e, i) => ({ titre: e.titre, pageDebut: e.page, pageFin: Math.max(e.page, (entrees[i + 1]?.page ?? nbPagesTotal + 1) - 1), chasse: false }))
 }
 
 export function decouperParEntetes(pages: PageTexte[]): Acte[] {
