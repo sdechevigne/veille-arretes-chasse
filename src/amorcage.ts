@@ -3,7 +3,7 @@
 import type { TypeSource } from './types.ts'
 
 export interface ArreteUrl { departement: string; url_source: string | null }
-export interface SourceDerivee { departement: string; type_source: TypeSource; url: string; verifiee: boolean }
+export interface SourceDerivee { departement: string; type_source: TypeSource; url: string; verifiee: boolean; note?: string }
 
 /** Domaine du site de la préfecture, par code de département (règle `www.<nom-sans-accents-tirets>.gouv.fr` + exceptions relevées dans les URL réelles). */
 export const DOMAINES_PREFECTURES: Record<string, string> = {
@@ -105,6 +105,7 @@ export const DOMAINES_PREFECTURES: Record<string, string> = {
   '95': 'www.val-doise.gouv.fr', // Val-d'Oise
 }
 
+const NOTE_SITE_TIERS = 'amorçage 2026-10 depuis arretes.url_source — à corriger à la main (page /IMG/pdf non navigable)'
 const CHEMIN_RAA = '/Publications/Recueil-des-actes-administratifs'
 
 /** URL sans son dernier segment de chemin (ni paramètres ni ancre). */
@@ -121,7 +122,7 @@ function depuisUrlSource(departement: string, urlSource: string): SourceDerivee 
   // Hors .gouv.fr : fédération des chasseurs, visitée avec succès en 2026 → URL gardée telle quelle.
   if (!hote.endsWith('.gouv.fr')) return { departement, type_source: 'federation', url: urlSource, verifiee: true }
   // Site de l'État autre que la préfecture (ex. DRIEAT Île-de-France) : on garde le dossier parent, à confirmer.
-  if (hote !== DOMAINES_PREFECTURES[departement]) return { departement, type_source: 'prefecture_chasse', url: pageParente(u), verifiee: false }
+  if (hote !== DOMAINES_PREFECTURES[departement]) return { departement, type_source: 'prefecture_chasse', url: pageParente(u), verifiee: false, note: NOTE_SITE_TIERS }
   // Un PDF direct n'apprend rien de plus que le recueil : seul le RAA est amorcé.
   if (/\.pdf$/i.test(u.pathname) || u.pathname.includes('/contenu/telechargement/')) return null
   if (/\/Consultation-du-public\//i.test(u.pathname)) return { departement, type_source: 'prefecture_consultation', url: pageParente(u), verifiee: false }
@@ -149,7 +150,7 @@ export function sqlAmorcage(sources: SourceDerivee[]): string {
   const lignes = [...sources]
     .sort((a, b) => a.departement.localeCompare(b.departement) || a.type_source.localeCompare(b.type_source) || a.url.localeCompare(b.url))
     .map(s => {
-      const note = s.type_source === 'prefecture_raa' ? 'amorçage 2026-10 heuristique domaine' : 'amorçage 2026-10 depuis arretes.url_source'
+      const note = s.note ?? (s.type_source === 'prefecture_raa' ? 'amorçage 2026-10 heuristique domaine' : 'amorçage 2026-10 depuis arretes.url_source')
       return `  (${litteral(s.departement)}, ${litteral(s.type_source)}, ${litteral(s.url)}, ${s.verifiee ? 'now()' : 'NULL'}, ${litteral(note)})`
     })
   return `INSERT INTO public.arretes_sources (departement, type_source, url, verifiee_le, notes) VALUES\n${lignes.join(',\n')}\nON CONFLICT (departement, type_source, url) DO NOTHING;\n`

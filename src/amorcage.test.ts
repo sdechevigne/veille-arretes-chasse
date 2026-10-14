@@ -22,7 +22,7 @@ describe('deriverSources', () => {
   it('site de l\'État tiers (DRIEAT) : prefecture_chasse sur le dossier parent, non vérifiée, plus le RAA', () => {
     const s = deriverSources([{ departement: '92', url_source: 'https://www.drieat.ile-de-france.developpement-durable.gouv.fr/IMG/pdf/projet_ap92.pdf' }])
     expect(s).toEqual([
-      { departement: '92', type_source: 'prefecture_chasse', url: 'https://www.drieat.ile-de-france.developpement-durable.gouv.fr/IMG/pdf', verifiee: false },
+      { departement: '92', type_source: 'prefecture_chasse', url: 'https://www.drieat.ile-de-france.developpement-durable.gouv.fr/IMG/pdf', verifiee: false, note: expect.stringContaining('à corriger à la main') },
       { departement: '92', type_source: 'prefecture_raa', url: 'https://www.hauts-de-seine.gouv.fr/Publications/Recueil-des-actes-administratifs', verifiee: false },
     ])
   })
@@ -36,6 +36,7 @@ describe('deriverSources', () => {
     expect(Object.keys(DOMAINES_PREFECTURES)).toEqual(expect.arrayContaining(['2A', '2B', '75']))
     for (const d of Object.values(DOMAINES_PREFECTURES)) expect(d).toMatch(/^www\.[a-z0-9.-]+\.gouv\.fr$/)
     expect(new Set(Object.values(DOMAINES_PREFECTURES)).size).toBe(96)
+    expect(DOMAINES_PREFECTURES['20']).toBeUndefined() // la Corse est 2A / 2B
   })
   it('export réel 2026-2027 : 95 RAA, 44 fédérations, chaque .gouv.fr de préfecture correspond à la table', () => {
     const arretes: ArreteUrl[] = JSON.parse(readFileSync(new URL('./__fixtures__/arretes-urls-2026-2027.json', import.meta.url), 'utf8'))
@@ -62,6 +63,10 @@ describe('sqlAmorcage', () => {
       "  ('21', 'federation', 'https://fdc21.fr/l''arrete.pdf', now(), 'amorçage 2026-10 depuis arretes.url_source'),\n" +
       "  ('24', 'prefecture_raa', 'https://www.dordogne.gouv.fr/Publications/Recueil-des-actes-administratifs', NULL, 'amorçage 2026-10 heuristique domaine')\n" +
       "ON CONFLICT (departement, type_source, url) DO NOTHING;\n")
+  })
+  it('note propre à la source (site tiers) prioritaire sur la note par défaut', () => {
+    const sql = sqlAmorcage([{ departement: '92', type_source: 'prefecture_chasse', url: 'https://x.gouv.fr/IMG/pdf', verifiee: false, note: "à corriger l'url" }])
+    expect(sql).toContain("NULL, 'à corriger l''url')")
   })
   it('liste vide : chaîne vide', () => { expect(sqlAmorcage([])).toBe('') })
 })

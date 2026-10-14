@@ -2,6 +2,7 @@ name: Veille arrêtés de chasse
 
 # Étages 1-2 du pipeline (collecte + lecture mécanique), sans Claude.
 # Rythme : quotidien d'avril à août, hebdomadaire (lundi) le reste de l'année — décidé dans le job.
+# Le cron est suspendu tant que le secret VEILLE_PROXY_URL est absent ; le lancement manuel reste possible.
 on:
   schedule:
     - cron: '20 5 * * *'   # 05:20 UTC chaque jour ; le job sort tout de suite hors campagne sauf le lundi
@@ -27,20 +28,26 @@ jobs:
   veille:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
-      VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
+    defaults:
+      run:
+        shell: bash   # -eo pipefail : un échec avant `tee` fait échouer l'étape
     steps:
       - name: Faut-il tourner aujourd'hui ?
         id: rythme
+        env:
+          EVENEMENT: ${{ github.event_name }}
+          VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: |
           mois=$(date -u +%m); jour=$(date -u +%u)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$mois" -ge 4 ] && [ "$mois" -le 8 ]; } || [ "$jour" = "1" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; echo "Hors campagne et pas lundi : rien à faire."; fi
+          if [ "$EVENEMENT" = "schedule" ] && [ -z "$VEILLE_PROXY_URL" ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "proxy absent : collecte planifiée suspendue (les sources .gouv.fr seraient toutes en échec)"
+          elif [ "$EVENEMENT" = "workflow_dispatch" ] || { [ "$mois" -ge 4 ] && [ "$mois" -le 8 ]; } || [ "$jour" = "1" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Hors campagne et pas lundi : rien à faire."
+          fi
       - uses: actions/checkout@v4
         if: steps.rythme.outputs.go == 'true'
       - uses: actions/setup-node@v4
@@ -50,22 +57,51 @@ jobs:
           cache: npm
       - name: Outils PDF / OCR
         if: steps.rythme.outputs.go == 'true'
-        run: sudo apt-get update -q && sudo apt-get install -y -q poppler-utils tesseract-ocr tesseract-ocr-fra
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-fra
       - name: Dépendances
         if: steps.rythme.outputs.go == 'true'
         run: npm ci
       - name: Collecte
         if: steps.rythme.outputs.go == 'true'
+        env:
+          DEPARTEMENTS: ${{ github.event.inputs.departements }}
+          SANS_PROXY: ${{ github.event.inputs.sans_proxy }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+          VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: |
-          args=""
-          [ -n "${{ github.event.inputs.departements }}" ] && args="$args --departements ${{ github.event.inputs.departements }}"
-          [ "${{ github.event.inputs.sans_proxy }}" = "true" ] && args="$args --sans-proxy"
-          npm run veille -- collecter $args | tee collecte.json
+          args=()
+          if [ -n "$DEPARTEMENTS" ]; then
+            [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
+            args+=(--departements "$DEPARTEMENTS")
+          fi
+          [ "$SANS_PROXY" = "true" ] && args+=(--sans-proxy)
+          npm run veille -- collecter "${args[@]}" | tee collecte.json
       - name: Lecture mécanique
         if: steps.rythme.outputs.go == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+          VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- lire --limite 100 | tee lecture.json
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+          VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- sante | tee sante.json
       - uses: actions/upload-artifact@v4
         if: always() && steps.rythme.outputs.go == 'true'
