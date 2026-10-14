@@ -30,7 +30,7 @@ function decoderSansErreur(s: string): string {
 function absolue(href: string, base: string): string | null {
   const h = decoderEntites(href).trim()
   if (!h || h.startsWith('#') || /^(javascript|mailto|tel):/i.test(h)) return null
-  try { const u = new URL(h, base); u.hash = ''; return u.href } catch { return null }
+  try { const u = new URL(h, base); if (u.protocol !== 'http:' && u.protocol !== 'https:') return null; u.hash = ''; return u.href } catch { return null }
 }
 const estPdf = (url: string) => {
   try { return /\.pdf$/i.test(new URL(url).pathname) || /\/contenu\/telechargement\//i.test(new URL(url).pathname) } catch { return false }

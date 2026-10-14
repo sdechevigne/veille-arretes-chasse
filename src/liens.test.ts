@@ -97,4 +97,8 @@ describe('robustesse', () => {
     expect(pagesRaaAVisiter(l, new Date('2026-09-14'))).toEqual(['https://www.exemple.gouv.fr/raa/%E0%A4%A'])
     expect(titreDocument({ url: 'https://x.fr/%E0%A4%A.pdf', texte: '' })).toBe('%E0%A4%A')
   })
+  it('ignore les protocoles autres que http(s) (file:, ftp:)', () => {
+    const html = '<a class="fr-link" href="file:///tmp/x.pdf">x</a><a class="fr-link" href="ftp://h/y.pdf">y</a><a class="fr-link" href="/ok.pdf">ok</a>'
+    expect(extraireLiens(html, 'https://a.fr/p').pdfs.map(l => l.url)).toEqual(['https://a.fr/ok.pdf'])
+  })
 })

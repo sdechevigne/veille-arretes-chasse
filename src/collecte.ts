@@ -7,15 +7,18 @@ import { saisonCourante, saisonDepuisTexte } from './saison.ts'
 import type { Source, Telechargeur, Telechargement } from './types.ts'
 
 export interface DepsCollecte { depot: Depot; archive: Archive; http: Telechargeur; now?: () => Date; log?: (ligne: string) => void }
-export interface OptionsCollecte { departements?: string[]; profondeurMax?: number; joursRevisiteUrl?: number }
+export interface OptionsCollecte { departements?: string[]; profondeurMax?: number; joursRevisiteUrl?: number; maxPagesParSource?: number }
 export interface StatsCollecte { sourcesVisitees: number; sourcesEnEchec: number; pagesLues: number; pdfVus: number; pdfNouveaux: number; pdfIgnores: number; erreurs: string[] }
 
 const estPdf = (t: Telechargement) => t.contentType === 'application/pdf' || t.octets.subarray(0, 5).toString() === '%PDF-'
+interface Parcours { visitees: Set<string>; pdfs: number; pagesSuivies: number; plafondSignale: boolean }
+const pageEnEchec = (t: Telechargement) => t.statut !== 200 || !!t.erreur
+const statutEchec = (t: Telechargement) => t.statut !== 0 && !t.erreur ? `http_${t.statut}` : 'erreur_reseau'
 const melanger = <T>(a: T[]) => a.map(x => [Math.random(), x] as const).sort((p, q) => p[0] - q[0]).map(p => p[1])
 
 export async function collecter(deps: DepsCollecte, o: OptionsCollecte = {}): Promise<StatsCollecte> {
   const now = deps.now ?? (() => new Date()); const log = deps.log ?? (() => {})
-  const profondeurMax = o.profondeurMax ?? 3; const joursRevisite = o.joursRevisiteUrl ?? 30
+  const profondeurMax = o.profondeurMax ?? 3; const joursRevisite = o.joursRevisiteUrl ?? 30; const maxPages = o.maxPagesParSource ?? 100
   const stats: StatsCollecte = { sourcesVisitees: 0, sourcesEnEchec: 0, pagesLues: 0, pdfVus: 0, pdfNouveaux: 0, pdfIgnores: 0, erreurs: [] }
   const urlsVues = await deps.depot.urlsVuesDepuis(joursRevisite)
   let sources = await deps.depot.sourcesActives()
@@ -25,9 +28,9 @@ export async function collecter(deps: DepsCollecte, o: OptionsCollecte = {}): Pr
     stats.sourcesVisitees++
     try {
       const rep = await deps.http.telecharger(source.url)
-      if (rep.statut !== 200) {
+      if (pageEnEchec(rep)) {
+        await deps.depot.majSanteSource(source.id, false, statutEchec(rep))
         stats.sourcesEnEchec++
-        await deps.depot.majSanteSource(source.id, false, rep.statut === 0 ? 'erreur_reseau' : `http_${rep.statut}`)
         log(`${source.departement} ${source.type_source} : ${rep.statut} ${rep.erreur ?? ''}`)
         continue
       }
@@ -38,7 +41,8 @@ export async function collecter(deps: DepsCollecte, o: OptionsCollecte = {}): Pr
         continue
       }
       stats.pagesLues++
-      const statut = await parcourir(source, rep.octets.toString('utf8'), source.url, 0, new Set([source.url]))
+      const parcours: Parcours = { visitees: new Set([source.url]), pdfs: 0, pagesSuivies: 0, plafondSignale: false }
+      const statut = await parcourir(source, rep.octets.toString('utf8'), source.url, 0, parcours)
       await deps.depot.majSanteSource(source.id, statut === 'ok', statut)
       if (statut !== 'ok') stats.sourcesEnEchec++
     } catch (e) {
@@ -48,29 +52,33 @@ export async function collecter(deps: DepsCollecte, o: OptionsCollecte = {}): Pr
   }
   return stats
 
-  // Parcourt une page (et, pour les RAA, ses sous-pages d'année/mois + pagination). Renvoie le statut de santé.
-  async function parcourir(source: Source, html: string, urlPage: string, profondeur: number, visitees: Set<string>): Promise<'ok' | 'aucun_pdf' | 'structure_changee'> {
+  // Parcourt une page (et, pour les RAA, ses sous-pages d'année/mois + pagination). Renvoie le statut de santé de la source
+  // (calculé à la page racine) : `ok` dès qu'un PDF a été vu ou qu'au moins une sous-page a été lue en 200 (un mois sans PDF
+  // en début de mois n'est pas un échec).
+  async function parcourir(source: Source, html: string, urlPage: string, profondeur: number, p: Parcours): Promise<'ok' | 'aucun_pdf' | 'structure_changee'> {
     const liens = extraireLiens(html, urlPage)
     if (!liens.pdfs.length && !liens.sousPages.length && !liens.pagination.length) return profondeur === 0 ? 'structure_changee' : 'aucun_pdf'
-    let trouve = 0
-    for (const lien of liens.pdfs) { trouve++; await traiterLienPdf(source, lien) }
+    for (const lien of liens.pdfs) { p.pdfs++; await traiterLienPdf(source, lien) }
     if (source.type_source === 'prefecture_raa') {
       // Sous-pages (année → mois) : un niveau de plus ; pagination d'une page à contenu : même niveau (page sœur).
       const suivantes = [
-        ...(profondeur < profondeurMax ? pagesRaaAVisiter(liens, now()).map(u => ({ u, p: profondeur + 1 })) : []),
-        ...(liens.pdfs.length || liens.sousPages.length ? liens.pagination.map(u => ({ u, p: profondeur })) : []),
+        ...(profondeur < profondeurMax ? pagesRaaAVisiter(liens, now()).map(u => ({ u, niveau: profondeur + 1 })) : []),
+        ...(liens.pdfs.length || liens.sousPages.length ? liens.pagination.map(u => ({ u, niveau: profondeur })) : []),
       ]
-      for (const { u, p } of suivantes) {
-        if (visitees.has(u)) continue
-        visitees.add(u)
+      for (const { u, niveau } of suivantes) {
+        if (p.visitees.has(u)) continue
+        if (p.visitees.size >= maxPages) {
+          if (!p.plafondSignale) { p.plafondSignale = true; stats.erreurs.push(`${source.departement} parcours interrompu : plafond de ${maxPages} pages atteint`) }
+          break
+        }
+        p.visitees.add(u)
         const rep = await deps.http.telecharger(u)
-        if (rep.statut !== 200) { stats.erreurs.push(`${source.departement} page ${u} : ${rep.statut} ${rep.erreur ?? ''}`.trim()); continue }
-        stats.pagesLues++
-        const st = await parcourir(source, rep.octets.toString('utf8'), u, p, visitees)
-        if (st === 'ok') trouve++
+        if (pageEnEchec(rep)) { stats.erreurs.push(`${source.departement} page ${u} : ${rep.statut} ${rep.erreur ?? ''}`.trim()); continue }
+        stats.pagesLues++; p.pagesSuivies++
+        await parcourir(source, rep.octets.toString('utf8'), u, niveau, p)
       }
     }
-    return trouve ? 'ok' : 'aucun_pdf'
+    return p.pdfs || p.pagesSuivies ? 'ok' : 'aucun_pdf'
   }
 
   async function traiterLienPdf(source: Source, lien: Lien) {

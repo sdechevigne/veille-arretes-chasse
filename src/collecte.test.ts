@@ -100,4 +100,47 @@ describe('collecter', () => {
     await collecter({ depot, archive: creerArchiveMemoire(), http }, { departements: ['24'] })
     expect(http.appels).toEqual(['https://b/b.pdf'])
   })
+  it('RAA : racine → mois en 200 sans PDF (début de mois) : santé ok, 0 nouveau', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 's', departement: '50', type_source: 'prefecture_raa', url: 'https://x/raa', actif: true, verifiee_le: null, echecs_consecutifs: 1 })
+    const http = httpTable({
+      'https://x/raa': { corps: '<html><a class="fr-card__link" href="/raa/2026">2026</a></html>' },
+      'https://x/raa/2026': { corps: '<html><a class="fr-card__link" href="/raa/2026/11.-Septembre">Septembre</a></html>' },
+      'https://x/raa/2026/11.-Septembre': { corps: '<html><p>Aucun document ce mois-ci</p></html>' },
+    })
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http, now: () => new Date('2026-09-02') })
+    expect((depot.etat.sources[0] as any).dernier_statut).toBe('ok'); expect(depot.etat.sources[0].echecs_consecutifs).toBe(0)
+    expect(stats.pdfNouveaux).toBe(0); expect(stats.sourcesEnEchec).toBe(0)
+  })
+  it('RAA : racine avec sous-page suivie en 404 et aucun PDF : aucun_pdf', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 's', departement: '50', type_source: 'prefecture_raa', url: 'https://x/raa', actif: true, verifiee_le: null, echecs_consecutifs: 0 })
+    const http = httpTable({ 'https://x/raa': { corps: '<html><a class="fr-card__link" href="/raa/2026">2026</a></html>' } })
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http, now: () => new Date('2026-09-02') })
+    expect((depot.etat.sources[0] as any).dernier_statut).toBe('aucun_pdf'); expect(stats.sourcesEnEchec).toBe(1)
+    expect(stats.erreurs.some(e => e.includes('/raa/2026'))).toBe(true)
+  })
+  it('page source avec erreur curl (statut 0 ou erreur) : erreur_reseau ; compté une seule fois si la mise à jour lève', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 'a', departement: '08', type_source: 'federation', url: 'https://x/a', actif: true, verifiee_le: null, echecs_consecutifs: 0 })
+    const http: Telechargeur = { async telecharger(url) { return { statut: 200, octets: Buffer.alloc(0), urlFinale: url, contentType: null, erreur: 'taille 99 > max 1' } } }
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http })
+    expect((depot.etat.sources[0] as any).dernier_statut).toBe('erreur_reseau'); expect(stats.sourcesEnEchec).toBe(1)
+    const depotCasse = { ...depot, async majSanteSource() { throw new Error('base indisponible') } }
+    const s2 = await collecter({ depot: depotCasse, archive: creerArchiveMemoire(), http: httpTable({ 'https://x/a': { statut: 500 } }) })
+    expect(s2.sourcesEnEchec).toBe(1)
+  })
+  it('plafond de pages par source : parcours interrompu et consigné', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 's', departement: '50', type_source: 'prefecture_raa', url: 'https://x/raa', actif: true, verifiee_le: null, echecs_consecutifs: 0 })
+    const http = httpTable({
+      'https://x/raa': { corps: '<html><a class="fr-card__link" href="/raa/2026">2026</a></html>' },
+      'https://x/raa/2026': { corps: '<html><a class="fr-card__link" href="/raa/2026/10.-Aout">Août</a><a class="fr-card__link" href="/raa/2026/11.-Septembre">Septembre</a></html>' },
+      'https://x/raa/2026/10.-Aout': { corps: '<html><p>vide</p></html>' },
+      'https://x/raa/2026/11.-Septembre': { corps: '<html><p>vide</p></html>' },
+    })
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http, now: () => new Date('2026-09-14') }, { maxPagesParSource: 2 })
+    expect(http.appels).toEqual(['https://x/raa', 'https://x/raa/2026'])
+    expect(stats.erreurs.some(e => e.includes('plafond de 2 pages'))).toBe(true)
+  })
 })

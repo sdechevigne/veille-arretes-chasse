@@ -64,6 +64,12 @@ describe('creerTelechargeur', () => {
     const r = await creerTelechargeur({ delaiMinMs: 0, delaiMaxMs: 0, tentatives: 2 }, exec).telecharger('https://a/b')
     expect(exec).toHaveBeenCalledTimes(2); expect(r.statut).toBe(0); expect(r.erreur).toMatch(/marqueur/)
   })
+  it('restreint les protocoles (y compris après redirection) à http et https', async () => {
+    const { exec, appels } = execFactice([{ code: 0, stdout: ok('x') }])
+    await creerTelechargeur({ delaiMinMs: 0, delaiMaxMs: 0 }, exec).telecharger('https://a/b')
+    expect(appels[0][appels[0].indexOf('--proto') + 1]).toBe('=http,https')
+    expect(appels[0][appels[0].indexOf('--proto-redir') + 1]).toBe('=http,https')
+  })
   it('limite la taille côté curl (--max-filesize)', async () => {
     const { exec, appels } = execFactice([{ code: 0, stdout: ok('x') }])
     await creerTelechargeur({ delaiMinMs: 0, delaiMaxMs: 0, tailleMaxOctets: 1234 }, exec).telecharger('https://a/b')

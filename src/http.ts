@@ -42,7 +42,7 @@ export function creerTelechargeur(o: OptionsHttp = {}, exec: Exec = execCurl): T
   }
 
   async function unEssai(url: string): Promise<Telechargement> {
-    const args = ['-sS', '-L', '--http1.1', '-4', '--max-time', String(timeoutS), '--max-filesize', String(tailleMax), '-A', UA, '-H', 'Accept-Language: fr-FR,fr;q=0.9', '-w', `${MARQUEUR}%{http_code} %{url_effective}`]
+    const args = ['-sS', '-L', '--proto', '=http,https', '--proto-redir', '=http,https', '--http1.1', '-4', '--max-time', String(timeoutS), '--max-filesize', String(tailleMax), '-A', UA, '-H', 'Accept-Language: fr-FR,fr;q=0.9', '-w', `${MARQUEUR}%{http_code} %{url_effective}`]
     if (o.proxy) args.unshift('-x', o.proxy)
     args.push(url)
     const r = await exec(args)

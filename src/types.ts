@@ -24,5 +24,5 @@ export interface LectureMecanique {
   qualite_texte: QualiteTexte; pages_retenues: number[]; statut: 'a_lire' | 'ignore'; motif_ignore?: string
 }
 
-export interface Telechargement { statut: number; octets: Buffer; urlFinale: string; contentType: string | null; erreur?: string }
+export interface Telechargement { statut: number; octets: Buffer; urlFinale: string; contentType: 'application/pdf' | null; erreur?: string }
 export interface Telechargeur { telecharger(url: string): Promise<Telechargement> }
