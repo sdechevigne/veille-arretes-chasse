@@ -3,3 +3,6 @@ out/
 .env
 .env.*
 *.env
+collecte.json
+lecture.json
+sante.json
