@@ -10,9 +10,14 @@ const MARQUEUR = '\n' // -w écrit "\n<code> <url>" après le corps
 
 export function expurger(msg: string, proxy?: string): string {
   if (!proxy) return msg
-  let secrets: string[] = []
-  try { const u = new URL(proxy); secrets = [u.password, u.username, decodeURIComponent(u.password), decodeURIComponent(u.username), u.host, u.hostname, u.port] } catch { secrets = [proxy] }
-  for (const s of [...new Set(secrets)].filter(Boolean).sort((a, b) => b.length - a.length)) msg = msg.split(s).join('<proxy>')
+  const secrets = new Set<string>([proxy])
+  const decoder = (v: string): string => { try { return decodeURIComponent(v) } catch { return v } }
+  try {
+    const u = new URL(proxy.includes('://') ? proxy : `http://${proxy}`)
+    for (const v of [u.username, u.password]) { secrets.add(v); secrets.add(decoder(v)) }
+    for (const v of [u.host, u.hostname, u.port]) secrets.add(v)
+  } catch { /* proxy illisible : seule la chaîne brute est masquée */ }
+  for (const s of [...secrets].filter(Boolean).sort((a, b) => b.length - a.length)) msg = msg.split(s).join('<proxy>')
   return msg
 }
 
@@ -37,12 +42,14 @@ export function creerTelechargeur(o: OptionsHttp = {}, exec: Exec = execCurl): T
   }
 
   async function unEssai(url: string): Promise<Telechargement> {
-    const args = ['-sS', '-L', '--http1.1', '-4', '--max-time', String(timeoutS), '-A', UA, '-H', 'Accept-Language: fr-FR,fr;q=0.9', '-w', `${MARQUEUR}%{http_code} %{url_effective}`]
+    const args = ['-sS', '-L', '--http1.1', '-4', '--max-time', String(timeoutS), '--max-filesize', String(tailleMax), '-A', UA, '-H', 'Accept-Language: fr-FR,fr;q=0.9', '-w', `${MARQUEUR}%{http_code} %{url_effective}`]
     if (o.proxy) args.unshift('-x', o.proxy)
     args.push(url)
     const r = await exec(args)
     if (r.code !== 0) return { statut: 0, octets: Buffer.alloc(0), urlFinale: url, contentType: null, erreur: expurger((r.stderr || `curl code ${r.code}`).trim().split('\n')[0], o.proxy) }
-    const idx = r.stdout.lastIndexOf(MARQUEUR); const fin = r.stdout.subarray(idx + 1).toString().trim()
+    const idx = r.stdout.lastIndexOf(MARQUEUR)
+    if (idx < 0) return { statut: 0, octets: Buffer.alloc(0), urlFinale: url, contentType: null, erreur: 'réponse sans marqueur' }
+    const fin = r.stdout.subarray(idx + 1).toString().trim()
     const [code, ...urlParts] = fin.split(' '); const octets = r.stdout.subarray(0, idx)
     if (octets.length > tailleMax) return { statut: +code || 0, octets: Buffer.alloc(0), urlFinale: urlParts.join(' ') || url, contentType: null, erreur: `taille ${octets.length} > max ${tailleMax}` }
     return { statut: +code || 0, octets, urlFinale: urlParts.join(' ') || url, contentType: octets.subarray(0, 5).toString() === '%PDF-' ? 'application/pdf' : null }
@@ -50,9 +57,14 @@ export function creerTelechargeur(o: OptionsHttp = {}, exec: Exec = execCurl): T
 
   return {
     async telecharger(url) {
-      await attendre(new URL(url).host)
+      const hote = new URL(url).host
       let dernier: Telechargement | null = null
-      for (let i = 0; i < tentatives; i++) { dernier = await unEssai(url); if (dernier.statut !== 0 || !dernier.erreur) break }
+      for (let i = 0; i < tentatives; i++) {
+        await attendre(hote)
+        dernier = await unEssai(url)
+        dernierAcces.set(hote, Date.now())
+        if (dernier.statut !== 0 || !dernier.erreur) break
+      }
       return dernier!
     },
   }
