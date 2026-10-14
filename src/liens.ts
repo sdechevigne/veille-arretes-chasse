@@ -7,13 +7,37 @@ const RE_A = /<a\b([^>]*)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>/gi
 const MOIS = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre']
 
 const sansAccents = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-const texteBrut = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
+
+const ENTITES_NOMMEES: Record<string, string> = {
+  amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ',
+  eacute: 'é', egrave: 'è', ecirc: 'ê', agrave: 'à', ocirc: 'ô', ccedil: 'ç', ugrave: 'ù',
+}
+// Décodage en une seule passe (« &amp;lt; » devient « &lt; », pas « < »).
+export function decoderEntites(s: string): string {
+  return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (tout, dec, hex, nom) => {
+    if (nom) return ENTITES_NOMMEES[nom.toLowerCase()] ?? tout
+    const code = dec ? parseInt(dec, 10) : parseInt(hex, 16)
+    try { return String.fromCodePoint(code) } catch { return tout }
+  })
+}
+const texteBrut = (html: string) => decoderEntites(html.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
+
+// Un pourcentage mal formé (« %E0%A4%A ») fait lever decodeURIComponent : on garde alors la valeur brute.
+function decoderSansErreur(s: string): string {
+  try { return decodeURIComponent(s) } catch { return s }
+}
 
 function absolue(href: string, base: string): string | null {
-  if (!href || href.startsWith('#') || /^(javascript|mailto|tel):/i.test(href)) return null
-  try { return new URL(href.trim(), base).href } catch { return null }
+  const h = decoderEntites(href).trim()
+  if (!h || h.startsWith('#') || /^(javascript|mailto|tel):/i.test(h)) return null
+  try { const u = new URL(h, base); u.hash = ''; return u.href } catch { return null }
 }
-const estPdf = (url: string) => /\.pdf(\?|$)/i.test(url) || /\/contenu\/telechargement\//i.test(url)
+const estPdf = (url: string) => {
+  try { return /\.pdf$/i.test(new URL(url).pathname) || /\/contenu\/telechargement\//i.test(new URL(url).pathname) } catch { return false }
+}
+function dernierSegment(url: string): string {
+  try { return new URL(url).pathname.split('/').pop() ?? '' } catch { return url.split(/[?#]/)[0].split('/').pop() ?? '' }
+}
 const estPartage = (url: string) => /twitter\.com|facebook\.com|linkedin\.com/i.test(url)
 
 export function extraireLiens(html: string, urlPage: string): Liens {
@@ -41,7 +65,7 @@ export function pagesRaaAVisiter(liens: Liens, now: Date): string[] {
   const cibles = [{ mois: precedent, annee: anneePrecedent }, { mois, annee }]
   const out: string[] = []
   for (const s of liens.sousPages) {
-    const cle = sansAccents(`${s.texte} ${decodeURIComponent(new URL(s.url).pathname.split('/').pop() ?? '')}`)
+    const cle = sansAccents(`${s.texte} ${decoderSansErreur(dernierSegment(s.url))}`)
     const annees = [...cle.matchAll(/(?<![0-9])(20\d\d)(?![0-9])/g)].map(a => +a[1])
     const moisNomme = MOIS.findIndex(m => new RegExp(`(^|[^a-z])${m}([^a-z]|$)`).test(cle))
     const retenu = moisNomme >= 0
@@ -54,8 +78,8 @@ export function pagesRaaAVisiter(liens: Liens, now: Date): string[] {
 
 export function titreDocument(lien: Lien): string {
   let t = lien.texte.replace(/^t[ée]l[ée]charger\s+/i, '')
-  t = t.replace(/\s+PDF\s*-\s*[\d,.]+\s*[KM]b\s*-\s*\d{2}\/\d{2}\/\d{4}\s*$/i, '')
+  t = t.replace(/\s+PDF\s*-\s*[\d,.]+\s*[KMG][bo]\s*-\s*\d{2}\/\d{2}\/\d{4}\s*$/i, '')
   t = t.replace(/\s*\(?PDF\)?\s*$/i, '')
-  if (!t) t = decodeURIComponent(lien.url.split('/').pop() ?? '').replace(/\.pdf$/i, '')
+  if (!t) t = decoderSansErreur(dernierSegment(lien.url)).replace(/\.pdf$/i, '')
   return t.trim()
 }
