@@ -56,4 +56,45 @@ describe('lireMecaniquement', () => {
     const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp })
     expect(stats.erreurs).toBe(1); expect(stats.aLire).toBe(1); expect((depot.etat.documents[0] as any).erreur).toMatch(/pdfinfo/)
   })
+  it('panne d’outil (toutes les pages en erreur) → erreur rejouable, pas ignore', async () => {
+    const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
+    const k = `arretes/2026-2027/54/${'f'.repeat(64)}.pdf`; archive.objets.set(k, Buffer.from('%PDF-'))
+    await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: 'https://x/f.pdf', titre: 'AP', sha256: 'f'.repeat(64), r2_key: k, taille_octets: 5 })
+    const outils: OutilsPdf = { async nbPages() { return 3 }, async texteNatif() { throw new Error('pdftotext introuvable') }, async ocrPage() { throw new Error('tesseract introuvable') } }
+    const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp })
+    const doc = depot.etat.documents[0] as any
+    expect(stats.erreurs).toBe(1); expect(doc.statut_traitement).toBe('erreur'); expect(doc.erreur).toMatch(/lecture impossible.*(tesseract|pdftotext)/)
+  })
+  it('1200 pages sans sommaire → document trop long, aucun OCR', async () => {
+    const { doc, stats, outils } = await docTest(Array.from({ length: 1200 }, (_, i) => `page ${i + 1} ${long('texte')}`))
+    expect(stats.erreurs).toBe(1); expect(doc.statut_traitement).toBe('erreur'); expect(doc.erreur).toMatch(/document trop long : 1200 pages/); expect(outils.ocr).toEqual([])
+  })
+  it('sommaire : acte à titre nu retenu si sa 1re page parle de chasse ; actes écartés journalisés', async () => {
+    const pages = Array.from({ length: 40 }, (_, i) => `page ${i + 1} ${long('texte')}`)
+    pages[0] = `RECUEIL DES ACTES ADMINISTRATIFS 50-2026-160\nSOMMAIRE\nArrêté DDT-SEN-2026-45 ........ 10\nArrêté portant réglementation de la pêche ........ 20\nArrêté portant médaille ........ 30\n${long('s')}`
+    for (let n = 10; n <= 19; n++) pages[n - 1] = `PRÉFET DE LA MANCHE\nArrêté DDT-SEN-2026-45 ouverture et clôture de la chasse 2026-2027\nsanglier ${long('a')}`
+    const journal: string[] = []
+    const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
+    const sha = 'a'.repeat(64); const r2_key = `arretes/2026-2027/50/${sha}.pdf`; archive.objets.set(r2_key, Buffer.from('%PDF-'))
+    await depot.creerDocument({ departement: '50', saison: '2026-2027', source_id: null, url: 'https://x/a.pdf', titre: 'RAA', sha256: sha, r2_key, taille_octets: 5 })
+    const stats = await lireMecaniquement({ depot, archive, outils: outilsFactices(pages, false), noms: NOMS, fichierTemp, log: l => journal.push(l) })
+    const doc = depot.etat.documents[0] as any
+    expect(stats.aLire).toBe(1); expect(doc.pages_retenues).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+    expect(journal.join('\n')).toMatch(/actes écartés.*pêche.*médaille/)
+  })
+  it('recueil sans aucun acte de chasse → ignore avec motif dédié', async () => {
+    const pages = Array.from({ length: 40 }, (_, i) => `page ${i + 1} ${long('texte')}`)
+    pages[0] = `RECUEIL DES ACTES ADMINISTRATIFS 50-2026-160\nSOMMAIRE\nArrêté portant réglementation de la pêche ........ 10\nArrêté portant médaille ........ 20\nArrêté portant nomination ........ 30\n${long('s')}`
+    const { doc, stats } = await docTest(pages, true, '50')
+    expect(stats.ignores).toBe(1); expect(doc.statut_traitement).toBe('ignore'); expect(doc.erreur).toMatch(/recueil : aucun acte de chasse repéré \(3 actes au sommaire\)/)
+  })
+  it('échec de marquerErreur : la boucle continue et l’erreur est comptée', async () => {
+    const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
+    for (const c of ['1', '2']) { const k = `arretes/2026-2027/54/${c.repeat(64)}.pdf`; archive.objets.set(k, Buffer.from('%PDF-')); await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: `https://x/${c}.pdf`, titre: 'AP', sha256: c.repeat(64), r2_key: k, taille_octets: 5 }) }
+    depot.marquerErreur = async () => { throw new Error('base injoignable') }
+    const outils: OutilsPdf = { async nbPages() { throw new Error('pdfinfo cassé') }, async texteNatif() { return '' }, async ocrPage() { return '' } }
+    const journal: string[] = []
+    const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp, log: l => journal.push(l) })
+    expect(stats).toMatchObject({ traites: 2, erreurs: 2 }); expect(journal.join('\n')).toMatch(/base injoignable/)
+  })
 })

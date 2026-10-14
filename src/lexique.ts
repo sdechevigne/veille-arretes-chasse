@@ -14,5 +14,5 @@ export const ESPECES_RECHERCHE: Record<string, RegExp> = {
 }
 export const compterEspeces = (t: string) => Object.values(ESPECES_RECHERCHE).filter(re => re.test(t)).length
 
-export const RE_LEXIQUE_CHASSE = /\b(chasse|chasseurs?|gibier|sangliers?|chevreuils?|cerfs?|battues?|esod|nuisibles?|v[eé]nerie|louveterie|plan de chasse|pi[eé]geage)\b/i
+export const RE_LEXIQUE_CHASSE = /\b(chasse|chasseurs?|gibier|sangliers?|chevreuils?|cerfs?|battues?|esod|nuisibles?|v[eé]nerie|louveterie|plan de chasse|pi[eé]geage|cyn[ée]g[ée]tique|d[ée]g[âa]ts de gibier|r[ée]gulation|d[ée]terrage|grand gibier|petit gibier|oiseaux de passage|gibier d'eau|plan de gestion)\b/i
 export const parleDeChasse = (t: string) => RE_LEXIQUE_CHASSE.test(t)

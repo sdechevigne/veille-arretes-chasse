@@ -12,6 +12,7 @@ describe('lexique', () => {
   it('parleDeChasse', () => {
     expect(parleDeChasse('arrêté portant ouverture de la chasse')).toBe(true)
     expect(parleDeChasse('arrêté portant réglementation de la pêche en eau douce')).toBe(false)
+    for (const t of ['schéma cynégétique', 'dégâts de gibier', 'régulation du ragondin', 'déterrage du blaireau', 'grand gibier', 'petit gibier', 'oiseaux de passage', 'gibier d\'eau', 'plan de gestion du cerf']) expect(parleDeChasse(t)).toBe(true)
   })
   it('cerf-volant et pie-grièche ne sont pas du gibier ; mois suivi d’une lettre : pas une date', () => {
     expect(compterEspeces('un cerf-volant et une pie-grièche')).toBe(0)
