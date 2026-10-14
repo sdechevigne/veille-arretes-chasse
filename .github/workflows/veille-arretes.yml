@@ -13,7 +13,7 @@ on:
         required: false
         default: ''
       sans_proxy:
-        description: 'Ignorer le proxy (fédérations seulement)'
+        description: 'Ignorer le proxy et écarter les sources .gouv.fr (fédérations seulement)'
         type: boolean
         default: false
 
@@ -80,7 +80,7 @@ jobs:
             args+=(--departements "$DEPARTEMENTS")
           fi
           [ "$SANS_PROXY" = "true" ] && args+=(--sans-proxy)
-          npm run veille -- collecter "${args[@]}" | tee collecte.json
+          npm run veille -- collecter --budget-min 45 "${args[@]}" | tee collecte.json
       - name: Lecture mécanique
         if: steps.rythme.outputs.go == 'true'
         env:
@@ -91,7 +91,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
-        run: npm run veille -- lire --limite 100 | tee lecture.json
+        run: npm run veille -- lire --limite 100 --budget-min 60 | tee lecture.json
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
         env:

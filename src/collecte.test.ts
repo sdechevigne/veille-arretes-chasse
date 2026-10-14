@@ -143,4 +143,25 @@ describe('collecter', () => {
     expect(http.appels).toEqual(['https://x/raa', 'https://x/raa/2026'])
     expect(stats.erreurs.some(e => e.includes('plafond de 2 pages'))).toBe(true)
   })
+  it('échéance déjà passée : aucune source visitée, arrêt précoce', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 'a', departement: '08', type_source: 'federation', url: 'https://a/a.pdf', actif: true, verifiee_le: null, echecs_consecutifs: 0 })
+    const http = httpTable({ 'https://a/a.pdf': { corps: PDF_A } })
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http, now: () => new Date('2026-09-14T10:00:00Z') }, { echeance: new Date('2026-09-14T09:00:00Z') })
+    expect(stats.sourcesVisitees).toBe(0); expect(stats.arretPrecoce).toBe(true); expect(http.appels).toEqual([])
+    expect(depot.etat.sources[0].verifiee_le).toBeNull(); expect(depot.etat.documents).toHaveLength(0)
+  })
+  it('sans échéance : arretPrecoce reste faux', async () => {
+    const stats = await collecter({ depot: creerDepotMemoire(), archive: creerArchiveMemoire(), http: httpTable({}) })
+    expect(stats.arretPrecoce).toBe(false); expect(stats.sourcesEcartees).toBe(0)
+  })
+  it('exclureHotes : la source .gouv.fr est écartée (non visitée), la fédération visitée', async () => {
+    const depot = creerDepotMemoire()
+    depot.etat.sources.push({ id: 'a', departement: '24', type_source: 'prefecture_chasse', url: 'https://www.dordogne.gouv.fr/chasse', actif: true, verifiee_le: null, echecs_consecutifs: 0 },
+                            { id: 'b', departement: '24', type_source: 'federation', url: 'https://fdc24.com/a.pdf', actif: true, verifiee_le: null, echecs_consecutifs: 0 })
+    const http = httpTable({ 'https://fdc24.com/a.pdf': { corps: PDF_A }, 'https://www.dordogne.gouv.fr/chasse': { corps: '<html></html>' } })
+    const stats = await collecter({ depot, archive: creerArchiveMemoire(), http }, { exclureHotes: h => h.endsWith('.gouv.fr') })
+    expect(stats.sourcesEcartees).toBe(1); expect(stats.sourcesVisitees).toBe(1)
+    expect(http.appels).toEqual(['https://fdc24.com/a.pdf']); expect(depot.etat.sources[0].verifiee_le).toBeNull()
+  })
 })

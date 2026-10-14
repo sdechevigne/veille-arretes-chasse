@@ -7,24 +7,37 @@ import { saisonCourante, saisonDepuisTexte } from './saison.ts'
 import type { Source, Telechargeur, Telechargement } from './types.ts'
 
 export interface DepsCollecte { depot: Depot; archive: Archive; http: Telechargeur; now?: () => Date; log?: (ligne: string) => void }
-export interface OptionsCollecte { departements?: string[]; profondeurMax?: number; joursRevisiteUrl?: number; maxPagesParSource?: number }
-export interface StatsCollecte { sourcesVisitees: number; sourcesEnEchec: number; pagesLues: number; pdfVus: number; pdfNouveaux: number; pdfIgnores: number; erreurs: string[] }
+export interface OptionsCollecte {
+  departements?: string[]; profondeurMax?: number; joursRevisiteUrl?: number; maxPagesParSource?: number
+  /** Heure limite : vérifiée avant chaque source ; dépassée → arrêt propre (`stats.arretPrecoce`), sources restantes non touchées. */
+  echeance?: Date
+  /** Écarte les sources dont l'hôte (`new URL(url).hostname`) satisfait le prédicat (appliqué après le filtre départements). */
+  exclureHotes?: (hote: string) => boolean
+}
+export interface StatsCollecte { sourcesVisitees: number; sourcesEnEchec: number; pagesLues: number; pdfVus: number; pdfNouveaux: number; pdfIgnores: number; sourcesEcartees: number; arretPrecoce: boolean; erreurs: string[] }
 
 const estPdf = (t: Telechargement) => t.contentType === 'application/pdf' || t.octets.subarray(0, 5).toString() === '%PDF-'
 interface Parcours { visitees: Set<string>; pdfs: number; pagesSuivies: number; plafondSignale: boolean }
 const pageEnEchec = (t: Telechargement) => t.statut !== 200 || !!t.erreur
 const statutEchec = (t: Telechargement) => t.statut !== 0 && !t.erreur ? `http_${t.statut}` : 'erreur_reseau'
+const hoteDe = (url: string) => { try { return new URL(url).hostname } catch { return '' } }
 const melanger = <T>(a: T[]) => a.map(x => [Math.random(), x] as const).sort((p, q) => p[0] - q[0]).map(p => p[1])
 
 export async function collecter(deps: DepsCollecte, o: OptionsCollecte = {}): Promise<StatsCollecte> {
   const now = deps.now ?? (() => new Date()); const log = deps.log ?? (() => {})
   const profondeurMax = o.profondeurMax ?? 3; const joursRevisite = o.joursRevisiteUrl ?? 30; const maxPages = o.maxPagesParSource ?? 100
-  const stats: StatsCollecte = { sourcesVisitees: 0, sourcesEnEchec: 0, pagesLues: 0, pdfVus: 0, pdfNouveaux: 0, pdfIgnores: 0, erreurs: [] }
+  const stats: StatsCollecte = { sourcesVisitees: 0, sourcesEnEchec: 0, pagesLues: 0, pdfVus: 0, pdfNouveaux: 0, pdfIgnores: 0, sourcesEcartees: 0, arretPrecoce: false, erreurs: [] }
   const urlsVues = await deps.depot.urlsVuesDepuis(joursRevisite)
   let sources = await deps.depot.sourcesActives()
   if (o.departements?.length) sources = sources.filter(s => o.departements!.includes(s.departement))
+  if (o.exclureHotes) {
+    const avant = sources.length
+    sources = sources.filter(s => !o.exclureHotes!(hoteDe(s.url)))
+    stats.sourcesEcartees = avant - sources.length
+  }
 
   for (const source of melanger(sources)) {
+    if (o.echeance && now() >= o.echeance) { stats.arretPrecoce = true; log('échéance atteinte : collecte interrompue'); break }
     stats.sourcesVisitees++
     try {
       const rep = await deps.http.telecharger(source.url)

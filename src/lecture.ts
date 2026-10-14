@@ -6,25 +6,34 @@ import { lireSommaire, decouperParEntetes, actesChasse, pagesAOcr, type Acte } f
 import { classer, extraireMetadonnees, garde } from './classement.ts'
 import type { PageTexte } from './types.ts'
 
-export interface DepsLecture { depot: Depot; archive: Archive; outils: OutilsPdf; noms: Record<string, string>; fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }>; log?: (l: string) => void }
-export interface OptionsLecture { limite?: number; pagesMaxParDocument?: number }
-export interface StatsLecture { traites: number; aLire: number; ignores: number; erreurs: number; pagesOcr: number }
+export interface DepsLecture { depot: Depot; archive: Archive; outils: OutilsPdf; noms: Record<string, string>; fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }>; now?: () => Date; log?: (l: string) => void }
+export interface OptionsLecture {
+  limite?: number; pagesMaxParDocument?: number
+  /** Heure limite : vérifiée avant chaque document ; on ne commence pas un document dont la lecture estimée (MS_PAR_PAGE × pages) dépasse le temps restant. */
+  echeance?: Date
+}
+export interface StatsLecture { traites: number; aLire: number; ignores: number; erreurs: number; pagesOcr: number; arretPrecoce: boolean }
 const SEUIL_RECUEIL = 30
-const PAGES_MAX_PAR_DOCUMENT = 400
+const PAGES_MAX_PAR_DOCUMENT = 150
+const MS_PAR_PAGE = 8000 // estimation prudente (OCR) du temps de lecture d'une page
 // Titre « nu » de sommaire (« Arrêté DDT-SEN-2026-45 ») : une fois retirés arrêté, n°, préfectoral, chiffres, tirets et slashs, il ne dit plus rien de l'objet.
 const titreNu = (titre: string) => titre.replace(/arr[êe]t[ée]|n\s*°|pr[ée]fectoral/gi, '').replace(/[\d/-]/g, '').replace(/\s+/g, ' ').trim().length < 12
 const croissant = (a: number, b: number) => a - b
 
 export async function lireMecaniquement(deps: DepsLecture, o: OptionsLecture = {}): Promise<StatsLecture> {
-  const log = deps.log ?? (() => {}); const pagesMax = o.pagesMaxParDocument ?? PAGES_MAX_PAR_DOCUMENT; const stats: StatsLecture = { traites: 0, aLire: 0, ignores: 0, erreurs: 0, pagesOcr: 0 }
+  const log = deps.log ?? (() => {}); const now = deps.now ?? (() => new Date()); const pagesMax = o.pagesMaxParDocument ?? PAGES_MAX_PAR_DOCUMENT; const stats: StatsLecture = { traites: 0, aLire: 0, ignores: 0, erreurs: 0, pagesOcr: 0, arretPrecoce: false }
   const docs = await deps.depot.documentsParStatut('a_extraire', o.limite ?? 50)
+  const tempsRestantMs = () => o.echeance ? o.echeance.getTime() - now().getTime() : Infinity
   for (const doc of docs) {
+    if (tempsRestantMs() <= 0) { stats.arretPrecoce = true; log('échéance atteinte : lecture interrompue'); break }
     stats.traites++
     let temp: { chemin: string; liberer: () => void } | null = null
     try {
       temp = await deps.fichierTemp(await deps.archive.lire(doc.r2_key))
       const chemin = temp.chemin
       const nbPages = await deps.outils.nbPages(chemin)
+      // Pas de document commencé s'il ne tient pas dans le temps restant : il reste a_extraire pour le prochain passage.
+      if (tempsRestantMs() < MS_PAR_PAGE * Math.min(nbPages, pagesMax)) { stats.arretPrecoce = true; stats.traites--; log(`${doc.departement} reporté : ${nbPages} pages, temps restant insuffisant`); continue }
       const lues = new Map<number, PageTexte>()
       const lire = async (n: number) => { if (!lues.has(n)) { const p = await lirePage(deps.outils, chemin, n); if (p.source === 'ocr') stats.pagesOcr++; lues.set(n, p) } return lues.get(n)! }
       let actes: Acte[] | undefined; let retenues: number[]; let motifVide = 'document sans page'
