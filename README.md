@@ -27,7 +27,12 @@ npm run typecheck    # vérification des types
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_VEILLE_BUCKET`
-- `VEILLE_PROXY_URL` (optionnel)
+- `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite) pour sortir par une adresse française (serveur `free-fr.hideservers.net`) ; les sites des préfectures refusent les adresses hors de France.
+- `VEILLE_PROXY_URL` (optionnel, secours : proxy HTTP français)
+
+## Accès aux sites des préfectures
+
+Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France. Le workflow ouvre une connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`) avant la collecte, puis la referme. Points clés : le client exige un terminal pour demander son jeton (lancé dans `script -qec`), identifiants passés par fichier de configuration (jamais en argument), délai maximal de 90 s pour la demande de jeton. Validé depuis GitHub Actions le 2026-10-14 (5 préfectures sur 5).
 
 ## Spécification
 
