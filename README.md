@@ -31,4 +31,4 @@ npm run typecheck    # vérification des types
 
 ## Spécification
 
-Voir le dépôt meschasses : `docs/superpowers/specs/` (spec « Veille arrêtés »).
+Voir le dépôt meschasses : `docs/superpowers/specs/2026-10-14-veille-arretes-chasse-design.md`.
