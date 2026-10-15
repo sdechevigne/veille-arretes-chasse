@@ -90,8 +90,11 @@ export function validerVocabulaire(payload: PayloadCore): string[] {
       if (an1 && ![an1, an2].includes(+per[c].slice(0, 4))) e.push(`${c} hors saison: ${per[c]}`)
       return true
     })
-    if (an1 && valides[0] && valides[1] && per.date_ouverture > per.date_fermeture && +per.date_fermeture.slice(0, 4) !== an2)
-      e.push(`dates inversees: ${per.espece_code} ${per.date_ouverture}>${per.date_fermeture}`)
+    if (valides[0] && valides[1] && per.date_ouverture > per.date_fermeture) {
+      // Règle de la fonction SQL (fermeture hors seconde année) ; sinon refus du CHECK de la table (fermeture >= ouverture).
+      const motif = an1 && +per.date_fermeture.slice(0, 4) !== an2 ? 'inversees' : 'incoherentes'
+      e.push(`dates ${motif}: ${per.espece_code} ${per.date_ouverture}>${per.date_fermeture}`)
+    }
   }
   if (!payload.periodes.length) e.push('aucune periode datee')
 

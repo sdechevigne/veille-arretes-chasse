@@ -116,8 +116,15 @@ describe('validerVocabulaire', () => {
   it('dates inversées (même règle que la base : fermeture hors an2)', () => {
     const p = sain(); p.periodes[0].date_ouverture = '2027-01-10'; p.periodes[0].date_fermeture = '2026-12-01'
     expect(validerVocabulaire(p)).toEqual(['dates inversees: sanglier 2027-01-10>2026-12-01'])
-    p.periodes[0].date_fermeture = '2027-01-05'
+    p.periodes[0].date_fermeture = '2027-01-10'
     expect(validerVocabulaire(p)).toEqual([])
+  })
+
+  it('ouverture > fermeture refusée quelle que soit l\'année (CHECK de la table), message local distinct', () => {
+    const p = sain(); p.periodes[0].date_ouverture = '2027-01-10'; p.periodes[0].date_fermeture = '2027-01-05'
+    expect(validerVocabulaire(p)).toEqual(['dates incoherentes: sanglier 2027-01-10>2027-01-05'])
+    p.periodes[0].date_ouverture = '2026-10-10'; p.periodes[0].date_fermeture = '2026-10-01'
+    expect(validerVocabulaire(p)).toEqual(['dates inversees: sanglier 2026-10-10>2026-10-01'])
   })
 
   it('saison invalide ou non consécutive', () => {

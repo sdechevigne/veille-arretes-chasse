@@ -98,6 +98,20 @@ describe('appliquerDifference', () => {
     expect(r.periodes[0].preuve?.citation).toBe('x')
   })
 
+  it('une période lue identique à la publiée → « inchangé »', () => {
+    const r = appliquerDifference([publiee({ date_fermeture: '2027-02-28' })], lecture([lue({})]))
+    expect(r.journal).toEqual(['sanglier tous_modes : 2026-06-01→2027-02-28 inchangé'])
+    expect(r.periodes).toHaveLength(1)
+  })
+
+  it('les périodes renvoyées sont des copies, pas des alias des entrées', () => {
+    const pub = publiee({ espece_code: 'daim' }), l = lue({})
+    const r = appliquerDifference([pub], lecture([l]))
+    expect(r.periodes.some(x => x === pub || x === (l as unknown))).toBe(false)
+    r.periodes.find(x => x.espece_code === 'daim').date_ouverture = '1999-01-01'
+    expect(pub.date_ouverture).toBe('2026-06-01')
+  })
+
   it('ne modifie pas les entrées', () => {
     const pub = [publiee({})]
     const copie = JSON.parse(JSON.stringify(pub))
