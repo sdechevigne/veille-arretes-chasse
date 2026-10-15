@@ -23,12 +23,12 @@ const resultat = (extra: object = {}) => ligne({ type: 'result', subtype: 'succe
 const requete = (extra: Partial<RequeteLecture> = {}): RequeteLecture => ({ modele: 'sonnet', systeme, schema, texte: 'Dossier à lire', ...extra })
 
 // Exec simulé : mémorise l'appel et l'état du fichier de prompt au moment de l'appel.
-function execSimule(reponse: { code?: number; stdout?: string; stderr?: string } | Error) {
+function execSimule(reponse: { code?: number; stdout?: string; stderr?: string } | Error | string) {
   const appels: { args: string[]; stdin: string; env: Record<string, string>; delaiMs: number; systemeLu?: string; mode?: number }[] = []
   const exec: ExecClaude = async (args, stdin, env, delaiMs) => {
     const f = args[args.indexOf('--system-prompt-file') + 1]
     appels.push({ args, stdin, env, delaiMs, systemeLu: existsSync(f) ? readFileSync(f, 'utf8') : undefined, mode: existsSync(f) ? statSync(f).mode & 0o777 : undefined })
-    if (reponse instanceof Error) throw reponse
+    if (reponse instanceof Error || typeof reponse === 'string') throw reponse
     return { code: reponse.code ?? 0, stdout: reponse.stdout ?? '', stderr: reponse.stderr ?? '' }
   }
   return { exec, appels }
@@ -159,9 +159,51 @@ describe('creerLecteurClaude — réponses', () => {
     expect(message).not.toContain(JETON); expect(message).toContain('invalid token')
   })
 
+  it('exec qui rejette avec une valeur qui n’est pas une Error (chaîne) : cli, expurgé', async () => {
+    const { exec } = execSimule(`échec brut ${JETON}`)
+    const r = await creerLecteurClaude(JETON, exec).lire(requete())
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+    expect((r as { message: string }).message).toContain('échec brut'); expect((r as { message: string }).message).not.toContain(JETON)
+  })
+
+  it('délai signalé par un code ETIMEDOUT : timeout ; simple message « délai » : cli', async () => {
+    const erreurTemps = Object.assign(new Error('boum'), { code: 'ETIMEDOUT' })
+    expect(await creerLecteurClaude(JETON, execSimule(erreurTemps).exec).lire(requete())).toMatchObject({ ok: false, erreur: 'timeout' })
+    expect(await creerLecteurClaude(JETON, execSimule(new Error('délai dépassé quelque part')).exec).lire(requete())).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+
+  it('schéma invalide (compilation Ajv impossible) : cli, pas d’exception', async () => {
+    const { exec } = execSimule({ stdout: resultat() })
+    const r = await creerLecteurClaude(JETON, exec).lire(requete({ schema: { type: 'inconnu' } }))
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+
+  it('écriture du prompt système impossible : cli, pas d’exception', async () => {
+    const { exec, appels } = execSimule({ stdout: resultat() })
+    const r = await creerLecteurClaude(JETON, exec, process.env, '/chemin/inexistant/xyz').lire(requete())
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' }); expect(appels).toHaveLength(0)
+  })
+
+  it('code 1 sans résultat mais stderr de quota : quota', async () => {
+    const { exec } = execSimule({ code: 1, stderr: 'Error: 429 rate limit exceeded' })
+    expect(await creerLecteurClaude(JETON, exec).lire(requete())).toMatchObject({ ok: false, erreur: 'quota' })
+  })
+
   it('code 0 sans ligne result : cli', async () => {
     const { exec } = execSimule({ stdout: 'rien d’utile\n' })
     expect(await creerLecteurClaude(JETON, exec).lire(requete())).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+})
+
+describe('creerLecteurClaude — environnement du processus fils', () => {
+  it('retire les secrets du robot (SUPABASE_, R2_, MANTA_, HIDEME_, VEILLE_PROXY_URL), garde PATH/HOME, ajoute le jeton', async () => {
+    const source = {
+      PATH: '/usr/bin', HOME: '/home/ci', SUPABASE_SERVICE_ROLE_KEY: 'faux1', SUPABASE_URL: 'faux2', R2_SECRET_ACCESS_KEY: 'faux3', MANTA_WEBHOOK_SECRET: 'faux4',
+      HIDEME_X: 'faux5', VEILLE_PROXY_URL: 'http://u:p@proxy.example.fr:8080', CLAUDE_CODE_OAUTH_TOKEN: 'ancien', AUTRE: 'ok', VIDE: undefined,
+    } as NodeJS.ProcessEnv
+    const { exec, appels } = execSimule({ stdout: resultat() })
+    await creerLecteurClaude(JETON, exec, source).lire(requete())
+    expect(appels[0].env).toEqual({ PATH: '/usr/bin', HOME: '/home/ci', AUTRE: 'ok', CLAUDE_CODE_OAUTH_TOKEN: JETON })
   })
 })
 

@@ -32,13 +32,13 @@ export const execClaude: ExecClaude = (args, stdin, env, delaiMs) => new Promise
   p.stdout.on('data', d => { out += d }); p.stderr.on('data', d => { err += d })
   const terminer = (f: () => void) => { if (fini) return; fini = true; clearTimeout(minuteur); f() }
   const minuteur = setTimeout(() => terminer(() => { p.kill('SIGKILL'); reject(new DelaiDepasse(delaiMs)) }), delaiMs)
-  p.on('error', e => terminer(() => resolve({ code: 1, stdout: out, stderr: String(e) })))
+  p.on('error', e => terminer(() => resolve({ code: 1, stdout: out, stderr: [err, String(e)].filter(Boolean).join('\n') })))
   p.on('close', code => terminer(() => resolve({ code: code ?? 1, stdout: out, stderr: err })))
   p.stdin.on('error', () => { /* le processus a pu se terminer avant la fin de l'écriture : « close » rapporte le résultat */ })
   p.stdin.end(stdin)
 })
 
-const ajv = new Ajv2020({ allErrors: true, strict: false })
+const ajv = new Ajv2020({ allErrors: true, strict: true })
 const validateurs = new WeakMap<object, ValidateFunction>()
 function validateur(schema: object): ValidateFunction {
   let v = validateurs.get(schema); if (!v) { v = ajv.compile(schema); validateurs.set(schema, v) }
@@ -68,22 +68,32 @@ function messageUtilisateur(req: RequeteLecture): string {
   return JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n'
 }
 
-export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude): Lecteur {
+// Variables du robot qui n'ont rien à faire dans le processus fils (la CLI n'a besoin que de son jeton et de l'environnement système).
+const SECRETS_ROBOT = /^(SUPABASE_|R2_|MANTA_|HIDEME_)|^VEILLE_PROXY_URL$/
+export function envFils(source: NodeJS.ProcessEnv, token: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(source)) if (v !== undefined && !SECRETS_ROBOT.test(k)) env[k] = v
+  env.CLAUDE_CODE_OAUTH_TOKEN = token
+  return env
+}
+
+// `envSource` et `dossierTemp` sont injectables pour les tests. `lire` ne rejette jamais : toute panne devient une ReponseLecture en échec.
+export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude, envSource: NodeJS.ProcessEnv = process.env, dossierTemp: string = tmpdir()): Lecteur {
   const echec = (erreur: 'quota' | 'schema' | 'timeout' | 'cli', message: string): ReponseLecture => ({ ok: false, erreur, message: abreger(expurger(message.trim(), undefined, token)) })
   return {
     async lire(req) {
       const delaiMs = req.delaiMs ?? DELAI_LECTURE_MS
-      const dossier = mkdtempSync(join(tmpdir(), 'veille-claude-'))
+      let dossier: string | undefined
       try {
+        dossier = mkdtempSync(join(dossierTemp, 'veille-claude-'))
         const fichier = join(dossier, 'systeme.md')
         writeFileSync(fichier, req.systeme, { mode: 0o600 })
         const args = ['-p', '--model', req.modele, '--system-prompt-file', fichier, '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence',
           '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(req.schema)]
-        const env = { ...Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined)), CLAUDE_CODE_OAUTH_TOKEN: token }
         let r: { code: number; stdout: string; stderr: string }
-        try { r = await exec(args, messageUtilisateur(req), env, delaiMs) } catch (e) {
-          if (e instanceof DelaiDepasse || /délai|timeout|timed out/i.test((e as Error).message)) return echec('timeout', `délai de ${delaiMs} ms dépassé`)
-          return echec('cli', (e as Error).message)
+        try { r = await exec(args, messageUtilisateur(req), envFils(envSource, token), delaiMs) } catch (e: any) {
+          if (e instanceof DelaiDepasse || e?.code === 'ETIMEDOUT') return echec('timeout', `délai de ${delaiMs} ms dépassé`)
+          return echec('cli', String(e?.message ?? e))
         }
         const res = ligneResultat(r.stdout)
         if (res?.is_error) {
@@ -92,7 +102,7 @@ export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude)
           if (/structured_output/i.test(String(res.subtype))) return echec('schema', `sortie structurée refusée par la CLI : ${res.subtype}`)
           return echec('cli', texte || r.stderr || `is_error (code ${r.code})`)
         }
-        if (r.code !== 0) return echec('cli', r.stderr.trim() || `code de sortie ${r.code}`)
+        if (r.code !== 0) return echec(estQuota(r.stderr) ? 'quota' : 'cli', r.stderr.trim() || `code de sortie ${r.code}`)
         if (!res) return echec('cli', 'aucune ligne « result » dans la sortie de la CLI')
         const sortie = res.structured_output
         if (sortie === undefined || sortie === null) return echec('schema', 'structured_output absent')
@@ -101,7 +111,9 @@ export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude)
         const u = res.usage ?? {}
         return { ok: true, sortie: sortie as LectureClaude, modele: typeof res.model === 'string' ? res.model : req.modele,
           usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cache_creation: u.cache_creation_input_tokens ?? 0, cache_read: u.cache_read_input_tokens ?? 0 } }
-      } finally { rmSync(dossier, { recursive: true, force: true }) }
+      } catch (e: any) {
+        return echec('cli', String(e?.message ?? e))
+      } finally { if (dossier) rmSync(dossier, { recursive: true, force: true }) }
     },
   }
 }
