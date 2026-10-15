@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compterDates, compterEspeces, parleDeChasse } from './lexique.ts'
+import { compterDates, compterEspeces, parleDeChasse, ESPECES_RECHERCHE } from './lexique.ts'
 
 describe('lexique', () => {
   it('compte les dates en lettres, numériques, et année reportée à la ligne', () => {
@@ -18,5 +18,9 @@ describe('lexique', () => {
     expect(compterEspeces('un cerf-volant et une pie-grièche')).toBe(0)
     expect(compterEspeces('un cerf, des pies')).toBe(2)
     expect(compterDates('le 12 marsupilami 2026')).toBe(0)
+  })
+  it('cerf-élaphe et cerfs-élaphes sont du cerf (cerf-volant reste exclu)', () => {
+    for (const t of ['le cerf-élaphe', 'les cerfs-élaphes', 'Cerf-elaphe', 'le cerf-sika']) expect(ESPECES_RECHERCHE.cerf.test(t)).toBe(true)
+    expect(ESPECES_RECHERCHE.cerf.test('un cerf-volant')).toBe(false)
   })
 })

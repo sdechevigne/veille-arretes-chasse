@@ -23,10 +23,28 @@ export function zonesNonReprises(publiees: PeriodePubliee[], periodes: PeriodePu
     .map(p => `zone publiée non reprise : ${p.espece_code} ${modeDe(p)} (${p.zone_libelle})`)
 }
 
+// Mots de tête retirés avant comparaison (« la Manche », « Département de la Manche », « Préfecture des Côtes-d'Armor »).
+const MOTS_DE_TETE = new Set(['le', 'la', 'les', 'l', 'de', 'du', 'des', 'd', 'departement', 'prefecture'])
+
+/** Nom de département comparable : miroir élargi de `_deaccent_fr` en base (minuscules, sans accents, apostrophes et traits
+ *  d'union en espaces), espaces réduits, articles et « département / préfecture » de tête retirés. */
+export function nomDepartementNormalise(nom: string): string {
+  const mots = nom.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/['’\-]/g, ' ').split(/\s+/).filter(Boolean)
+  while (mots.length > 1 && MOTS_DE_TETE.has(mots[0])) mots.shift()
+  return mots.join(' ')
+}
+
+/** `preuve.dept_detecte` : le nom officiel quand le nom lu le désigne (forme longue comprise), sinon le nom lu tel quel
+ *  (le contrôle C2 de la base bloquera : vrai désaccord), avec une note du robot. Absent → nom officiel. */
+export function deptDetecte(lu: string | null, nomOfficiel: string): { valeur: string; note: string | null } {
+  if (lu === null || !lu.trim() || nomDepartementNormalise(lu) === nomDepartementNormalise(nomOfficiel)) return { valeur: nomOfficiel, note: null }
+  return { valeur: lu, note: `département lu « ${lu} » ≠ département attendu « ${nomOfficiel} »` }
+}
+
 /** Payload prêt pour la RPC. Extrait source : citation de la première période prouvée (ordre du payload), à défaut
  *  celle de la première suppression (modificatif ne faisant que supprimer). `notes` = mentions de Claude pour l'arrêté publié. */
 export function payloadDe(e: Omit<EntreePayload, 'preuveCore'> & { nom: string; suppressions: LectureClaude['suppressions'] }): PayloadCore {
-  const preuveCore = { code_detecte: e.departement, dept_detecte: e.acte.departement_lu ?? e.nom, millesime_detecte: e.saison, signature_detectee: e.acte.date ?? '', extrait_source: '' }
+  const preuveCore = { code_detecte: e.departement, dept_detecte: deptDetecte(e.acte.departement_lu, e.nom).valeur, millesime_detecte: e.saison, signature_detectee: e.acte.date ?? '', extrait_source: '' }
   const { suppressions, nom: _nom, ...entree } = e
   const payload = construirePayload({ ...entree, preuveCore })
   const extrait = payload.periodes.find(p => p.preuve)?.preuve?.citation ?? suppressions[0]?.citation ?? ''

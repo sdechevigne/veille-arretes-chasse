@@ -8,10 +8,10 @@ import { creerArchiveR2 } from './r2.ts'
 import { creerDepotSupabase, toutesLesPages, type DocumentEnBase } from './db.ts'
 import { collecter } from './collecte.ts'
 import { lireMecaniquement } from './lecture.ts'
-import { lireAvecClaude, preparerDossier, estLisible, TOKENS_MAX, type StatsLectureClaude } from './lecture-claude.ts'
+import { lireAvecClaude, preparerDossier, estLisible, TOKENS_MAX } from './lecture-claude.ts'
 import { creerLecteurClaude } from './claude.ts'
 import { chargerConsigne } from './consigne.ts'
-import { notifierManta, textePropositions } from './manta.ts'
+import { corpsNotificationLecture, notifierManta } from './manta.ts'
 import { syntheseBilan, texteBilan } from './bilan.ts'
 import { outilsPoppler } from './pdf.ts'
 import { deriverSources, sqlAmorcage, type ArreteUrl } from './amorcage.ts'
@@ -73,13 +73,13 @@ async function amorcer() {
   process.stdout.write(sqlAmorcage(deriverSources(arretes)))
 }
 
-/** Notification de fin de lecture Claude, depuis le JSON de `lire-claude` ; seul le webhook Manta est requis. */
+/** Notification de fin de lecture Claude, depuis le JSON de `lire-claude` (illisible → notification courte) ; seul le webhook Manta est requis. */
 async function notifier() {
   const fichier = opt('fichier'); if (!fichier) { console.error('--fichier attendu (sortie JSON de lire-claude)'); process.exit(2) }
-  const stats: StatsLectureClaude & { restantsALire?: number } = JSON.parse(readFileSync(fichier, 'utf8'))
+  const corps = corpsNotificationLecture(readFileSync(fichier, 'utf8'))
   const manta = lireManta()
   if (!manta) { console.error('webhook Manta non configuré : notification ignorée'); return }
-  await notifierManta(manta, { type: 'propositions', texte: textePropositions(stats), donnees: stats })
+  await notifierManta(manta, corps)
 }
 
 /** Lecture Claude : stdout = statistiques JSON seules (lues par le workflow), journal sur stderr ; code 0 même au quota. */
@@ -187,7 +187,7 @@ async function main() {
   const { data: docs, error: errDocs } = await sb.from('arretes_documents').select('statut_traitement, type_detecte').gte('decouvert_le', new Date(Date.now() - 7 * 86400e3).toISOString()).limit(1000)
   if (errDocs) throw new Error('sante : ' + errDocs.message)
   const parStatut: Record<string, number> = {}; const parType: Record<string, number> = {}
-  for (const d of docs ?? []) { parStatut[d.statut_traitement] = (parStatut[d.statut_traitement] ?? 0) + 1; parType[d.type_detecte] = (parType[d.type_detecte] ?? 0) + 1 }
+  for (const d of docs ?? []) { parStatut[d.statut_traitement] = (parStatut[d.statut_traitement] ?? 0) + 1; const type = d.type_detecte ?? 'non_detecte'; parType[type] = (parType[type] ?? 0) + 1 }
   console.log(JSON.stringify({ sourcesEnPanne: sources ?? [], documents7j: { parStatut, parType } }, null, 2))
 }
 main().catch(e => { console.error(e.message); process.exit(1) })

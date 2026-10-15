@@ -40,14 +40,18 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_VEILLE_BUCKET`
-- `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite) pour sortir par une adresse française (serveur `free-fr.hideservers.net`) ; les sites des préfectures refusent les adresses hors de France.
-- `VEILLE_PROXY_URL` (optionnel, secours : proxy HTTP français)
+- `VEILLE_PROXY_URL` : proxy HTTP français. Tant qu'il est absent, la collecte planifiée (cron) est suspendue ; le lancement manuel reste possible.
+- `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite, serveur `free-fr.hideservers.net`), réservés à l'intégration hide.me à venir ; pas encore utilisés par le workflow.
 - `CLAUDE_CODE_OAUTH_TOKEN` (optionnel) : jeton de l'abonnement Claude ; absent, l'étape « Lecture Claude » est sautée.
 - `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées.
 
 ## Accès aux sites des préfectures
 
-Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France. Le workflow ouvre une connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`) avant la collecte, puis la referme. Points clés : le client exige un terminal pour demander son jeton (lancé dans `script -qec`), identifiants passés par fichier de configuration (jamais en argument), délai maximal de 90 s pour la demande de jeton. Validé depuis GitHub Actions le 2026-10-14 (5 préfectures sur 5).
+Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France.
+
+État actuel : le workflow n'ouvre **aucune** connexion vers la France. La collecte passe par `VEILLE_PROXY_URL` quand ce secret est posé ; sans lui, le cron est suspendu, et un lancement manuel (option `sans_proxy` ou secret absent) écarte les sources `.gouv.fr` au lieu de les compter en panne.
+
+À venir (tâche dédiée, pas encore dans le YAML) : connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`) avant la collecte, refermée ensuite. Essai concluant depuis GitHub Actions le 2026-10-14 (5 préfectures sur 5) ; points relevés : le client exige un terminal pour demander son jeton (lancé dans `script -qec`), identifiants passés par fichier de configuration (jamais en argument), délai maximal de 90 s pour la demande de jeton.
 
 ## Spécification
 

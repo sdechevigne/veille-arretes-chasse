@@ -79,6 +79,7 @@ export function validerVocabulaire(payload: PayloadCore): string[] {
   const a = payload.arrete
   if (!STATUTS.includes(a.statut)) e.push(`statut hors vocabulaire: "${a.statut}"`)
   if (a.statut === 'signe' && !a.date_signature) e.push('statut "signe" mais date_signature absente')
+  if (a.date_signature != null && !dateValide(a.date_signature)) e.push(`date_signature invalide: "${a.date_signature}"`)
   if (!a.url_source?.trim()) e.push('url_source absente')
 
   for (const per of payload.periodes) {

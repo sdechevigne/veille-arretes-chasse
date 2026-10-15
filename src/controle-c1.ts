@@ -56,5 +56,5 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
   const tous = verifierPreuves(a.sortie, pages, doc.saison).details
   const details = horsImage(tous)
   notes.push(...tous.filter(d => !details.includes(d)).map(d => `levé par la double lecture : ${d}`))
-  return { lu: { ...lu, sortie: a.sortie }, c1: { ok: details.length === 0, details }, doubleLecture: true }
+  return { lu: { ...lu, sortie: a.sortie, modele: a.modele }, c1: { ok: details.length === 0, details }, doubleLecture: true }
 }

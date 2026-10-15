@@ -97,13 +97,17 @@ describe('creerDepotMemoire — lecture Claude', () => {
     d.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete, periodes })
     expect(await d.versionPubliee('54', '2026-2027')).toEqual({ arrete, periodes })
   })
-  it('propositionProjet : dernière proposition projet non annulée ni rejetée, avec le texte de son document', async () => {
+  it('propositionProjet : dernière proposition projet non annulée et validée (publiée ou validée / corrigée par un humain), avec le texte de son document', async () => {
     const d = await depotAvec([{ statut: 'propose', decouvert_le: '2026-05-01T00:00:00Z' }, { statut: 'propose', decouvert_le: '2026-05-02T00:00:00Z' }])
     d.etat.documents[0].texte_r2_key = 't1'; d.etat.documents[1].texte_r2_key = 't2'
-    const prop = (o: object) => ({ id: 'p', document_id: 'doc-1', departement: '54', saison: '2026-2027', type_acte: 'projet', decision: 'en_attente', annulee_le: null, created_at: '2026-05-01T00:00:00Z', payload: { periodes: [{ espece_code: 'sanglier' }] }, ...o }) as any
+    const prop = (o: object) => ({ id: 'p', document_id: 'doc-1', departement: '54', saison: '2026-2027', type_acte: 'projet', decision: 'publie', annulee_le: null, created_at: '2026-05-01T00:00:00Z', payload: { periodes: [{ espece_code: 'sanglier' }] }, ...o }) as any
     expect(await d.propositionProjet('54', '2026-2027')).toBeNull()
-    d.etat.propositions.push(prop({}), prop({ document_id: 'doc-2', created_at: '2026-05-03T00:00:00Z', decision: 'rejete' }), prop({ document_id: 'doc-2', created_at: '2026-05-04T00:00:00Z', annulee_le: '2026-05-05T00:00:00Z' }), prop({ type_acte: 'annuel', document_id: 'doc-2', created_at: '2026-05-06T00:00:00Z' }))
+    d.etat.propositions.push(prop({}), prop({ document_id: 'doc-2', created_at: '2026-05-03T00:00:00Z', decision: 'rejete' }), prop({ document_id: 'doc-2', created_at: '2026-05-04T00:00:00Z', annulee_le: '2026-05-05T00:00:00Z' }), prop({ type_acte: 'annuel', document_id: 'doc-2', created_at: '2026-05-06T00:00:00Z' }), prop({ document_id: 'doc-2', created_at: '2026-05-06T01:00:00Z', decision: 'en_attente' }))
     expect(await d.propositionProjet('54', '2026-2027')).toEqual({ texte_r2_key: 't1', periodes: [{ espece_code: 'sanglier' }] })
+    for (const decision of ['publie_note', 'valide_humain', 'corrige_humain']) {
+      d.etat.propositions.push(prop({ document_id: 'doc-2', created_at: `2026-05-06T0${2 + ['publie_note', 'valide_humain', 'corrige_humain'].indexOf(decision)}:00:00Z`, decision }))
+      expect(await d.propositionProjet('54', '2026-2027')).toEqual({ texte_r2_key: 't2', periodes: [{ espece_code: 'sanglier' }] })
+    }
     d.etat.propositions.push(prop({ document_id: 'disparu', created_at: '2026-05-07T00:00:00Z' }))
     expect(await d.propositionProjet('54', '2026-2027')).toBeNull()
   })
@@ -124,5 +128,14 @@ describe('creerDepotMemoire — lecture Claude', () => {
     expect(r).toMatchObject({ decision: 'en_attente', ecrit: false, mode_reglage: 'observation' })
     expect(d.etat.documents[0]).toMatchObject({ statut_traitement: 'en_attente', objet: 'Ouverture', erreur: null })
     expect(d.etat.propositions).toHaveLength(1)
+  })
+  it('propositionExiste : vrai seulement pour une proposition non annulée du document', async () => {
+    const d = await depotAvec([{ statut: 'a_lire', decouvert_le: '2026-10-01T00:00:00Z' }])
+    expect(await d.propositionExiste('doc-1')).toBe(false)
+    d.etat.propositions.push({ id: 'p1', document_id: 'doc-1', decision: 'en_attente', annulee_le: '2026-10-02T00:00:00Z', created_at: '2026-10-01T00:00:00Z' } as any)
+    expect(await d.propositionExiste('doc-1')).toBe(false)
+    d.etat.propositions.push({ id: 'p2', document_id: 'doc-1', decision: 'en_attente', annulee_le: null, created_at: '2026-10-03T00:00:00Z' } as any)
+    expect(await d.propositionExiste('doc-1')).toBe(true)
+    expect(await d.propositionExiste('doc-2')).toBe(false)
   })
 })

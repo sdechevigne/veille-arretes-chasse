@@ -139,6 +139,13 @@ describe('validerVocabulaire', () => {
     expect(validerVocabulaire(p)).toEqual(['statut hors vocabulaire: "publie"'])
   })
 
+  it('date de signature mal formée ou impossible', () => {
+    const p = sain(); p.arrete.date_signature = '2026-02-30'
+    expect(validerVocabulaire(p)).toEqual(['date_signature invalide: "2026-02-30"'])
+    p.arrete.date_signature = '12/05/2026'
+    expect(validerVocabulaire(p)).toEqual(['date_signature invalide: "12/05/2026"'])
+  })
+
   it('signé sans date de signature, url vide, aucune période', () => {
     const p = sain(); p.arrete.date_signature = null; p.arrete.url_source = ' '; p.periodes = []
     expect(validerVocabulaire(p)).toEqual(['statut "signe" mais date_signature absente', 'url_source absente', 'aucune periode datee'])

@@ -104,3 +104,11 @@ describe('verifierPreuves — suppressions', () => {
     expect(r.details[0]).toMatch(/^suppression 1 \(lievre\) : citation introuvable \(similarité 0,\d\d\)$/)
   })
 })
+
+describe('verifierPreuves — plage « du 1er au 15 septembre 2026 »', () => {
+  it('le jour nu de la citation compte comme date d’ouverture', () => {
+    const pages = [page(1, 'Article 4 : le chevreuil est chassé en battue du 1er au 15 septembre 2026 inclus.')]
+    const r = verifierPreuves(lecture([periode({ citation: 'le chevreuil est chassé en battue du 1er au 15 septembre 2026', page: 1, espece_code: 'chevreuil', date_ouverture: '2026-09-01', date_fermeture: '2026-09-15' })]), pages, SAISON)
+    expect(r).toEqual({ ok: true, details: [], aRelire: [] })
+  })
+})

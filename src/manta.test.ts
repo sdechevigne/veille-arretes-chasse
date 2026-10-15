@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { notifierManta, textePropositions } from './manta.ts'
+import { corpsNotificationLecture, notifierManta, textePropositions, TEXTE_LECTURE_ILLISIBLE } from './manta.ts'
 
 const CFG = { url: 'https://hook.exemple.test/hook/jeton-secret', secret: 'secret-de-signature' }
 const CORPS = { type: 'propositions' as const, texte: 'Veille arrêtés : 1 proposition(s) à vérifier, 0 publiée(s)', donnees: { enAttente: 1 } }
@@ -58,5 +58,25 @@ describe('textePropositions', () => {
       .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 4 publiée(s) [quota Claude atteint, reste 12 documents]')
     expect(textePropositions({ enAttente: 1, publie: 0, publieNote: 0, arretQuota: true }))
       .toBe('Veille arrêtés : 1 proposition(s) à vérifier, 0 publiée(s) [quota Claude atteint]')
+  })
+})
+
+describe('textePropositions — erreurs et arrêt précoce', () => {
+  it('signale les documents en erreur et l’arrêt sur échéance', () => {
+    expect(textePropositions({ enAttente: 0, publie: 0, publieNote: 0, erreurs: 2, arretQuota: false, arretPrecoce: true }))
+      .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 0 publiée(s), 2 document(s) en erreur de lecture [budget de temps épuisé, lecture interrompue]')
+    expect(textePropositions({ enAttente: 1, publie: 0, publieNote: 0, erreurs: 0, arretQuota: false, arretPrecoce: false }))
+      .toBe('Veille arrêtés : 1 proposition(s) à vérifier, 0 publiée(s)')
+  })
+})
+
+describe('corpsNotificationLecture', () => {
+  it('JSON valide : texte des propositions et statistiques', () => {
+    const s = { enAttente: 1, publie: 0, publieNote: 0, erreurs: 1, arretQuota: false, arretPrecoce: false }
+    expect(corpsNotificationLecture(JSON.stringify(s))).toEqual({ type: 'propositions', texte: textePropositions(s), donnees: s })
+  })
+  it('JSON tronqué ou illisible : notification courte, jamais d’exception', () => {
+    expect(TEXTE_LECTURE_ILLISIBLE).toBe('Veille arrêtés : lecture Claude : résultat illisible')
+    for (const brut of ['{"enAttente": 1, "pub', 'pas du json', 'null', '42']) expect(corpsNotificationLecture(brut)).toEqual({ type: 'propositions', texte: TEXTE_LECTURE_ILLISIBLE, donnees: null })
   })
 })

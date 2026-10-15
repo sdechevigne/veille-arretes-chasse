@@ -210,7 +210,7 @@ describe('lireAvecClaude', () => {
   it('annuel après un projet identique : script_projet_signe, une requête courte, périodes du projet', async () => {
     const m = await monter([{ type: 'projet', pages: PROJET, statut: 'propose' }, {}], [ok(sortie({ periodes: [] }))])
     const periodesProjet = [P1, P2].map(({ preuve: pr, ...x }) => ({ ...x, preuve: pr }))
-    m.depot.etat.propositions.push({ id: 'p0', document_id: 'doc-1', departement: '54', saison: '2026-2027', type_acte: 'projet', decision: 'en_attente', annulee_le: null, created_at: '2026-05-01T00:00:00Z', payload: { periodes: periodesProjet } } as any)
+    m.depot.etat.propositions.push({ id: 'p0', document_id: 'doc-1', departement: '54', saison: '2026-2027', type_acte: 'projet', decision: 'publie', annulee_le: null, created_at: '2026-05-01T00:00:00Z', payload: { periodes: periodesProjet } } as any)
     const stats = await m.lancer()
     expect(m.lecteur.requetes).toHaveLength(1)
     expect(m.lecteur.requetes[0].texte).toContain('mode script_projet_signe')
@@ -361,5 +361,55 @@ describe('lireAvecClaude', () => {
     const stats = await m.lancer({ echeance: new Date(NOW.getTime() - 1) })
     expect(stats).toMatchObject({ traites: 0, arretPrecoce: true })
     expect(m.lecteur.requetes).toHaveLength(0)
+  })
+
+  it('projet dont la proposition est en attente (C1 non vérifié) : jamais de raccourci, lecture complète', async () => {
+    const m = await monter([{ type: 'projet', pages: PROJET, statut: 'propose' }, {}], [ok(sortie())])
+    m.depot.etat.propositions.push({ id: 'p0', document_id: 'doc-1', departement: '54', saison: '2026-2027', type_acte: 'projet', decision: 'en_attente', annulee_le: null, created_at: '2026-05-01T00:00:00Z', payload: { periodes: [P1, P2] } } as any)
+    await m.lancer()
+    expect(m.lecteur.requetes[0].texte).toContain('mode complet')
+    expect(m.depot.etat.propositions[1]).toMatchObject({ mode: 'complet', c1: { ok: true } })
+  })
+
+  it('erreur de plus de 2 000 caractères : le compteur de tentatives survit à la troncature', async () => {
+    const m = await monter([{}], [new Error('x'.repeat(3000))])
+    await m.lancer()
+    const e1 = m.doc(0).erreur as string
+    expect(e1.length).toBeLessThanOrEqual(2000)
+    expect(e1.endsWith('(tentative 1)')).toBe(true)
+    m.doc(0).updated_at = '2026-10-13T00:00:00Z'
+    const m2 = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: { async lire() { throw new Error('y'.repeat(3000)) } }, outils: {} as OutilsPdf, consigne: CONSIGNE, noms: NOMS,
+      fichierTemp: async () => { throw new Error('inutile') }, now: () => NOW }, { limite: 10 })
+    expect(m2.erreurs).toBe(1)
+    expect((m.doc(0).erreur as string).endsWith('(tentative 2)')).toBe(true)
+  })
+
+  it('soumission en échec alors que la proposition est enregistrée : document jamais re-marqué en erreur', async () => {
+    const m = await monter([{}], [ok(sortie())])
+    const soumettre = m.depot.soumettre.bind(m.depot)
+    m.depot.soumettre = async p => { await soumettre(p); throw new Error('réponse perdue') }
+    const stats = await m.lancer()
+    expect(stats).toMatchObject({ erreurs: 0, traites: 1 })
+    expect(m.depot.etat.propositions).toHaveLength(1)
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'propose', erreur: null })
+    expect(m.journal.some(l => /réponse perdue/.test(l) && /déjà enregistrée/.test(l))).toBe(true)
+  })
+
+  it('double lecture après une relance Opus : le modèle tracé est celui de la lecture retenue (Sonnet)', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const m = await monter([{}], [echec('schema'), ok(s, 'opus'), ok(s, 'sonnet'), ok(s, 'sonnet')])
+    await m.lancer()
+    expect(m.depot.etat.propositions[0].lecture).toMatchObject({ modele: 'sonnet', relance_opus: true, double_lecture: true })
+  })
+
+  it('département lu : forme longue ramenée au nom officiel ; autre département gardé tel quel et noté', async () => {
+    const a = await monter([{}], [ok(sortie({ acte: { ...ACTE, departement_lu: 'Préfecture de Meurthe-et-Moselle' } }))])
+    await a.lancer()
+    expect(a.depot.etat.propositions[0].payload.preuve.dept_detecte).toBe('Meurthe-et-Moselle')
+    const b = await monter([{}], [ok(sortie({ acte: { ...ACTE, departement_lu: 'Moselle' } }))])
+    await b.lancer()
+    const p = b.depot.etat.propositions[0]
+    expect(p.payload.preuve.dept_detecte).toBe('Moselle')
+    expect(p.lecture.notes).toMatch(/département lu « Moselle » ≠ département attendu « Meurthe-et-Moselle »/)
   })
 })

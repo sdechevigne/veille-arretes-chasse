@@ -1,7 +1,7 @@
 // Étage 3 : lecture par Claude des documents a_lire (dossier minimal, preuves C1, consolidation) et soumission à la RPC,
 // qui contrôle (C2-C6) et décide. Raccourcis : indéterminé (aucun appel), ponctuel (objet seul), projet → signé identique.
 import type { Archive } from './r2.ts'
-import { PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase, type VersionPubliee } from './db.ts'
+import { ERREUR_MAX, PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase, type VersionPubliee } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { Lecteur, RequeteLecture, UsageClaude } from './claude.ts'
 import { decouperArticles } from './articles.ts'
@@ -9,7 +9,7 @@ import { construireDossier } from './dossier.ts'
 import { comparerProjetSigne } from './projet.ts'
 import { validerVocabulaire, type PeriodePayload } from './payload.ts'
 import { saisonsDepuisTexte } from './saison.ts'
-import { consoliderPeriodes, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
+import { consoliderPeriodes, deptDetecte, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
 import { controlerC1, enPanne, panne, type Lu } from './controle-c1.ts'
 import type { PeriodePubliee } from './difference.ts'
 import type { Article, PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
@@ -53,7 +53,7 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
     } catch (e) {
       if (e instanceof QuotaAtteint) { stats.arretQuota = true; log(`quota Claude atteint : passage arrêté (${e.message})`); break }
       stats.traites++; stats.erreurs++
-      const message = `${PREFIXE_ERREUR_LECTURE} ${(e as Error).message} (tentative ${tentativesLecture(doc.erreur) + 1})`
+      const message = messageErreur((e as Error).message, tentativesLecture(doc.erreur) + 1)
       log(`${doc.departement} erreur : ${message}`)
       try { await deps.depot.marquerErreur(doc.id, message) } catch (e2) { log(`${doc.departement} : marquerErreur a échoué (${(e2 as Error).message}) après « ${message} »`) }
       continue
@@ -66,6 +66,13 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
     log(`${doc.departement} ${r.decision} : ${r.motif}`)
   }
   return stats
+}
+
+/** Motif d'erreur de lecture Claude : le corps est tronqué AVANT le compteur, qui survit donc toujours à la limite de la colonne
+ *  (sans lui, le compteur repartirait à 1 et le document serait relu indéfiniment). */
+export function messageErreur(message: string, tentative: number): string {
+  const suffixe = ` (tentative ${tentative})`
+  return `${PREFIXE_ERREUR_LECTURE} ${message}`.slice(0, ERREUR_MAX - suffixe.length) + suffixe
 }
 
 async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats: StatsLectureClaude, log: (l: string) => void): Promise<ResultatSoumission | null> {
@@ -128,7 +135,10 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   if (zones.length) c1 = { ok: false, details: [...c1.details, ...zones] }
   const { acte } = lu.sortie
   if (type === 'projet' && acte.signe) notes.push('projet lu comme signé : statut signé retenu')
-  const payload = payloadDe({ departement: dept, saison, nom: deps.noms[dept] ?? dept, statut: acte.signe ? 'signe' : 'en_attente_signature', acte, url: doc.url, periodes: conso.periodes, notes: lu.sortie.notes, suppressions: lu.sortie.suppressions })
+  const nom = deps.noms[dept] ?? dept
+  const noteDept = deptDetecte(acte.departement_lu, nom).note
+  if (noteDept) notes.push(noteDept)
+  const payload = payloadDe({ departement: dept, saison, nom, statut: acte.signe ? 'signe' : 'en_attente_signature', acte, url: doc.url, periodes: conso.periodes, notes: lu.sortie.notes, suppressions: lu.sortie.suppressions })
   const refus = validerVocabulaire(payload)
   if (refus.length) throw new Error(`payload refusé : ${refus.join(' ; ')}`)
 
@@ -138,7 +148,17 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
     lecture: { modele: lu.modele, relance_opus: lu.relanceOpus, double_lecture: doubleLecture, usage, notes: [lu.sortie.notes, ...notes].filter(Boolean).join('\n') },
     suppression_explicite: conso.suppressionExplicite,
   }
-  return depot.soumettre(proposition)
+  try {
+    return await depot.soumettre(proposition)
+  } catch (e) {
+    // Réponse perdue après enregistrement : re-marquer le document en erreur provoquerait une seconde proposition au rejeu.
+    // Vérification impossible : comportement par défaut (erreur rejouable), l'échec de la vérification est journalisé.
+    let existe = false
+    try { existe = await depot.propositionExiste(doc.id) } catch (e2) { log(`${dept} : vérification de la proposition impossible (${(e2 as Error).message})`) }
+    if (!existe) throw e
+    log(`${dept} : soumission en échec (${(e as Error).message}) mais proposition déjà enregistrée : document laissé tel quel`)
+    return null
+  }
 }
 
 export interface DossierPrepare {

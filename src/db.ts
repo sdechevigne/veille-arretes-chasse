@@ -27,9 +27,12 @@ export interface Depot {
    *  `departements` (non vide) restreint la file avant la limite. */
   documentsALire(limite: number, maintenant?: Date, departements?: string[]): Promise<DocumentEnBase[]>
   versionPubliee(departement: string, saison: string): Promise<VersionPubliee>
-  /** Dernière proposition `projet` encore valable du couple (ni annulée, ni rejetée) : texte de son document et périodes. */
+  /** Dernière proposition `projet` du couple non annulée et validée (DECISIONS_PROJET_FIABLES : C1 passé ou relu par un humain) :
+   *  texte de son document et périodes. Le raccourci projet → signé ne réutilise jamais une lecture en attente. */
   propositionProjet(departement: string, saison: string): Promise<{ texte_r2_key: string; periodes: PeriodePayload[] } | null>
   soumettre(p: PropositionRobot): Promise<ResultatSoumission>
+  /** Une proposition non annulée existe pour ce document (soumission enregistrée malgré une réponse en échec). */
+  propositionExiste(documentId: string): Promise<boolean>
   marquerIgnore(id: string, motif: string, acte: { numero: string | null; date: string | null; objet: string | null }): Promise<void>
   majStatut(id: string, statut: StatutTraitement, motif: string): Promise<void>
 }
@@ -53,6 +56,11 @@ export function tentativesLecture(erreur: string | null | undefined): number {
 }
 const rejouable = (d: Pick<DocumentEnBase, 'erreur'>) => tentativesLecture(d.erreur) > 0 && tentativesLecture(d.erreur) < TENTATIVES_MAX
 const COLONNES_PERIODE = 'id, espece_code, sous_type, date_ouverture, date_fermeture, mode_chasse, restriction_dates, source_article, zone_libelle, zone_geojson'
+
+/** Décisions d'une proposition `projet` réutilisable par le raccourci projet → signé (C1 jamais re-vérifié dans ce mode). */
+export const DECISIONS_PROJET_FIABLES = ['publie', 'publie_note', 'valide_humain', 'corrige_humain'] as const
+/** Longueur maximale du motif enregistré dans `arretes_documents.erreur`. */
+export const ERREUR_MAX = 2000
 
 const STATUT_SANTE = /^(ok|http_[0-9]{3}|aucun_pdf|structure_changee|erreur_reseau)$/ // miroir de la CHECK en base
 
@@ -102,8 +110,8 @@ export function creerDepotSupabase(url: string, serviceRoleKey: string): Depot {
       lancer('creerDocument', error); return data.id
     },
     async documentsParStatut(statut, limite) { const { data, error } = await sb.from('arretes_documents').select('*').eq('statut_traitement', statut).order('decouvert_le').limit(limite); lancer('documentsParStatut', error); return data ?? [] },
-    async majLecture(id, l) { const { error } = await sb.from('arretes_documents').update({ type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, 2000) ?? null }).eq('id', id); lancer('majLecture', error) },
-    async marquerErreur(id, message) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: 'erreur', erreur: message.slice(0, 2000) }).eq('id', id); lancer('marquerErreur', error) },
+    async majLecture(id, l) { const { error } = await sb.from('arretes_documents').update({ type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, ERREUR_MAX) ?? null }).eq('id', id); lancer('majLecture', error) },
+    async marquerErreur(id, message) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: 'erreur', erreur: message.slice(0, ERREUR_MAX) }).eq('id', id); lancer('marquerErreur', error) },
     async documentsALire(limite, maintenant = new Date(), departements) {
       const filtrer = (q: any) => departements?.length ? q.in('departement', departements) : q
       const { data, error } = await filtrer(sb.from('arretes_documents').select('*').eq('statut_traitement', 'a_lire')).order('decouvert_le').order('id').limit(limite); lancer('documentsALire', error)
@@ -124,15 +132,19 @@ export function creerDepotSupabase(url: string, serviceRoleKey: string): Depot {
     },
     async propositionProjet(departement, saison) {
       const { data: prop, error } = await sb.from('arretes_propositions').select('document_id, payload').eq('departement', departement).eq('saison', saison)
-        .eq('type_acte', 'projet').is('annulee_le', null).neq('decision', 'rejete').order('created_at', { ascending: false }).limit(1).maybeSingle(); lancer('propositionProjet', error)
+        .eq('type_acte', 'projet').is('annulee_le', null).in('decision', DECISIONS_PROJET_FIABLES).order('created_at', { ascending: false }).limit(1).maybeSingle(); lancer('propositionProjet', error)
       if (!prop) return null
       // Document disparu ou sans texte : pas de raccourci (lecture complète).
       const { data: doc, error: e2 } = await sb.from('arretes_documents').select('texte_r2_key').eq('id', prop.document_id).maybeSingle(); lancer('propositionProjet/document', e2)
       return doc?.texte_r2_key ? { texte_r2_key: doc.texte_r2_key, periodes: prop.payload?.periodes ?? [] } : null
     },
     async soumettre(p) { const { data, error } = await sb.rpc('robot_soumettre_proposition', { p_proposition: p }); lancer('soumettre', error); return data },
-    async marquerIgnore(id, motif, acte) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: 'ignore', erreur: motif.slice(0, 2000), numero_acte: acte.numero, date_acte: acte.date, objet: acte.objet }).eq('id', id); lancer('marquerIgnore', error) },
-    async majStatut(id, statut, motif) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: statut, erreur: motif.slice(0, 2000) }).eq('id', id); lancer('majStatut', error) },
+    async propositionExiste(documentId) {
+      const { count, error } = await sb.from('arretes_propositions').select('id', { count: 'exact', head: true }).eq('document_id', documentId).is('annulee_le', null)
+      lancer('propositionExiste', error); return (count ?? 0) > 0
+    },
+    async marquerIgnore(id, motif, acte) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: 'ignore', erreur: motif.slice(0, ERREUR_MAX), numero_acte: acte.numero, date_acte: acte.date, objet: acte.objet }).eq('id', id); lancer('marquerIgnore', error) },
+    async majStatut(id, statut, motif) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: statut, erreur: motif.slice(0, ERREUR_MAX) }).eq('id', id); lancer('majStatut', error) },
   }
 }
 
@@ -151,8 +163,8 @@ export function creerDepotMemoire(): Depot & { etat: EtatMemoire } {
     async urlsVuesDepuis(jours) { const depuis = Date.now() - jours * 86400e3; return new Set(etat.documents.filter(d => Date.parse(d.decouvert_le) >= depuis).map(d => d.url)) },
     async creerDocument(d) { if (etat.documents.some(x => x.sha256 === d.sha256)) throw new DoublonShaError(d.sha256); const id = `doc-${++seq}`; etat.documents.push({ ...d, id, statut_traitement: 'a_extraire', decouvert_le: new Date().toISOString(), type_detecte: null, qualite_texte: null, texte_r2_key: null, erreur: null }); return id },
     async documentsParStatut(statut, limite) { return etat.documents.filter(d => d.statut_traitement === statut).slice(0, limite) },
-    async majLecture(id, l) { const d = etat.documents.find(d => d.id === id)!; Object.assign(d, { type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, 2000) ?? null }) },
-    async marquerErreur(id, message) { const d = etat.documents.find(d => d.id === id)!; d.statut_traitement = 'erreur'; d.erreur = message.slice(0, 2000) },
+    async majLecture(id, l) { const d = etat.documents.find(d => d.id === id)!; Object.assign(d, { type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, ERREUR_MAX) ?? null }) },
+    async marquerErreur(id, message) { const d = etat.documents.find(d => d.id === id)!; d.statut_traitement = 'erreur'; d.erreur = message.slice(0, ERREUR_MAX) },
     async documentsALire(limite, maintenant = new Date(), departements) {
       const retenu = (d: DocumentEnBase) => !departements?.length || departements.includes(d.departement)
       const parDecouverte = (a: DocumentEnBase, b: DocumentEnBase) => a.decouvert_le.localeCompare(b.decouvert_le)
@@ -166,7 +178,7 @@ export function creerDepotMemoire(): Depot & { etat: EtatMemoire } {
       return v ? { arrete: v.arrete, periodes: v.periodes } : { arrete: null, periodes: [] }
     },
     async propositionProjet(departement, saison) {
-      const p = etat.propositions.filter(p => p.departement === departement && p.saison === saison && p.type_acte === 'projet' && p.annulee_le === null && p.decision !== 'rejete')
+      const p = etat.propositions.filter(p => p.departement === departement && p.saison === saison && p.type_acte === 'projet' && p.annulee_le === null && (DECISIONS_PROJET_FIABLES as readonly string[]).includes(p.decision))
         .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
       const cle = p && docDe(p.document_id)?.texte_r2_key
       return cle ? { texte_r2_key: cle, periodes: p.payload.periodes } : null
@@ -185,7 +197,8 @@ export function creerDepotMemoire(): Depot & { etat: EtatMemoire } {
       const muet = { statut: 'muet' as const, details: [] }
       return { id, decision, ecrit: false, mode_reglage: 'observation', controles: { c1: { statut: p.c1.ok ? 'ok' : 'bloquant', details: p.c1.details }, c2: muet, c3: muet, c4: muet, c5: muet, c6: muet }, motif: p.c1.ok ? 'contrôles au vert' : 'C1 en échec' }
     },
-    async marquerIgnore(id, motif, acte) { Object.assign(docDe(id)!, { statut_traitement: 'ignore', erreur: motif.slice(0, 2000), numero_acte: acte.numero, date_acte: acte.date, objet: acte.objet }) },
-    async majStatut(id, statut, motif) { Object.assign(docDe(id)!, { statut_traitement: statut, erreur: motif.slice(0, 2000) }) },
+    async propositionExiste(documentId) { return etat.propositions.some(p => p.document_id === documentId && p.annulee_le === null) },
+    async marquerIgnore(id, motif, acte) { Object.assign(docDe(id)!, { statut_traitement: 'ignore', erreur: motif.slice(0, ERREUR_MAX), numero_acte: acte.numero, date_acte: acte.date, objet: acte.objet }) },
+    async majStatut(id, statut, motif) { Object.assign(docDe(id)!, { statut_traitement: statut, erreur: motif.slice(0, ERREUR_MAX) }) },
   }
 }

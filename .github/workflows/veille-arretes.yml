@@ -2,7 +2,8 @@ name: Veille arrêtés de chasse
 
 # Pipeline complet : collecte, lecture mécanique, lecture Claude (si CLAUDE_CODE_OAUTH_TOKEN est posé), notification Manta.
 # Rythme : quotidien d'avril à août, hebdomadaire (lundi) le reste de l'année — décidé dans le job.
-# Le cron est suspendu tant que le secret VEILLE_PROXY_URL est absent ; le lancement manuel reste possible.
+# Le cron est suspendu tant que le secret VEILLE_PROXY_URL est absent ; le lancement manuel reste possible (option sans_proxy :
+# sources .gouv.fr écartées). La sortie par une adresse française via hide.me n'est PAS encore dans ce workflow (tâche à venir).
 # Le lundi (planifié), le job « bilan » commite etat/dernier-bilan.json : un commit réel par semaine garde le cron actif
 # (GitHub suspend le planning d'un dépôt public après 60 jours sans commit).
 on:
@@ -131,9 +132,9 @@ jobs:
           MANTA_WEBHOOK_SECRET: ${{ secrets.MANTA_WEBHOOK_SECRET }}
         run: |
           if [ ! -s lecture-claude.json ]; then echo "pas de lecture-claude.json : aucune notification"; exit 0; fi
-          # Fichier tronqué / invalide : lecture en échec → « non » (jamais d'échec d'étape). Sans lecture automatique =
-          # documents mis en attente d'un opérateur, à signaler comme les propositions.
-          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.arretQuota ? "oui" : "non")' 2>/dev/null || echo non)
+          # Fichier tronqué / invalide (passage interrompu) : « oui », la commande notifier envoie « résultat illisible ».
+          # Sans lecture automatique = documents mis en attente d'un opérateur ; erreurs = documents à relire : à signaler aussi.
+          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.erreurs > 0 || s.arretQuota ? "oui" : "non")' 2>/dev/null || echo oui)
           if [ "$a_notifier" = "oui" ]; then npm run -s veille -- notifier --fichier lecture-claude.json; else echo "rien à signaler"; fi
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'

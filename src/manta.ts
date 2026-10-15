@@ -20,8 +20,21 @@ export async function notifierManta(cfg: { url: string; secret: string }, corps:
 
 /** Texte de la notification de fin de lecture Claude (publiées = publiées sans et avec note).
  *  Les documents sans lecture automatique (en attente d'un opérateur) sont ajoutés quand il y en a. */
-export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; sansLecture?: number; arretQuota: boolean; restantsALire?: number }): string {
+export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; sansLecture?: number; erreurs?: number; arretQuota: boolean; arretPrecoce?: boolean; restantsALire?: number }): string {
   const sansLecture = s.sansLecture ? `, ${s.sansLecture} document(s) sans lecture automatique à traiter à la main` : ''
+  const erreurs = s.erreurs ? `, ${s.erreurs} document(s) en erreur de lecture` : ''
   const quota = s.arretQuota ? ` [quota Claude atteint${s.restantsALire !== undefined ? `, reste ${s.restantsALire} documents` : ''}]` : ''
-  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${sansLecture}${quota}`
+  const precoce = s.arretPrecoce ? ' [budget de temps épuisé, lecture interrompue]' : ''
+  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${sansLecture}${erreurs}${quota}${precoce}`
+}
+
+export const TEXTE_LECTURE_ILLISIBLE = 'Veille arrêtés : lecture Claude : résultat illisible'
+
+/** Corps de la notification de fin de lecture Claude, depuis le JSON brut de `lire-claude`.
+ *  Fichier tronqué ou illisible (passage interrompu) : notification courte plutôt que le silence. */
+export function corpsNotificationLecture(brut: string): CorpsNotification {
+  let stats: any
+  try { stats = JSON.parse(brut) } catch { stats = null }
+  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return { type: 'propositions', texte: TEXTE_LECTURE_ILLISIBLE, donnees: null }
+  return { type: 'propositions', texte: textePropositions(stats), donnees: stats }
 }

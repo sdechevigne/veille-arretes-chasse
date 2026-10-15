@@ -22,9 +22,17 @@ export function dateIso(fragment: string, saison: string): { iso: string; anneeD
   return { iso: d.toISOString().slice(0, 10), anneeDeduite }
 }
 
+// Jour nu suivi de « au <date> » (« du 1er au 15 septembre 2026 ») : il hérite du mois et de l'année de la date qui suit,
+// lue ensuite par RE_DATES (lookahead : rien n'est consommé).
+const JOUR_NU = String.raw`\b(\d{1,2})(?:er|"|’|')?\s+au\s+(?=\d{1,2}(?:er|"|’|')?\s+(${MOIS})\b(?:\s+(20\d\d)\b)?)`
+const RE_DATES_PLAGES = new RegExp(`${JOUR_NU}|${RE_DATES.source}`, 'gi')
+
 // Toutes les dates ISO valides du texte, dans l'ordre.
 export function datesDe(t: string, saison: string): string[] {
-  return (t.match(RE_DATES) ?? []).flatMap(f => { const d = dateIso(f, saison); return d ? [d.iso] : [] })
+  return [...t.matchAll(RE_DATES_PLAGES)].flatMap(m => {
+    const d = dateIso(m[1] ? [m[1], m[2], m[3]].filter(Boolean).join(' ') : m[0], saison)
+    return d ? [d.iso] : []
+  })
 }
 
 // Nombre de dates écrites dans le texte, avec ou sans année (« 1er septembre », « 15/08/2026 »), sans les valider.

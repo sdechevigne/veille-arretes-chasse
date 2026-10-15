@@ -68,8 +68,9 @@ function messageUtilisateur(req: RequeteLecture): string {
   return JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n'
 }
 
-// Variables du robot qui n'ont rien à faire dans le processus fils (la CLI n'a besoin que de son jeton et de l'environnement système).
-const SECRETS_ROBOT = /^(SUPABASE_|R2_|MANTA_|HIDEME_)|^VEILLE_PROXY_URL$/
+// Variables du robot (et jetons tiers) qui n'ont rien à faire dans le processus fils (la CLI n'a besoin que de son jeton et de l'environnement système).
+// ANTHROPIC_* : une clé d'API ferait basculer la CLI hors de l'abonnement ; GITHUB_TOKEN / GH_TOKEN : jeton du dépôt (runner).
+const SECRETS_ROBOT = /^(SUPABASE_|R2_|MANTA_|HIDEME_|ANTHROPIC_)|^(VEILLE_PROXY_URL|GITHUB_TOKEN|GH_TOKEN)$/
 export function envFils(source: NodeJS.ProcessEnv, token: string): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(source)) if (v !== undefined && !SECRETS_ROBOT.test(k)) env[k] = v

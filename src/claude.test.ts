@@ -196,14 +196,15 @@ describe('creerLecteurClaude — réponses', () => {
 })
 
 describe('creerLecteurClaude — environnement du processus fils', () => {
-  it('retire les secrets du robot (SUPABASE_, R2_, MANTA_, HIDEME_, VEILLE_PROXY_URL), garde PATH/HOME, ajoute le jeton', async () => {
+  it('retire les secrets du robot (SUPABASE_, R2_, MANTA_, HIDEME_, VEILLE_PROXY_URL, ANTHROPIC_, GITHUB_TOKEN, GH_TOKEN), garde PATH/HOME, ajoute le jeton', async () => {
     const source = {
       PATH: '/usr/bin', HOME: '/home/ci', SUPABASE_SERVICE_ROLE_KEY: 'faux1', SUPABASE_URL: 'faux2', R2_SECRET_ACCESS_KEY: 'faux3', MANTA_WEBHOOK_SECRET: 'faux4',
       HIDEME_X: 'faux5', VEILLE_PROXY_URL: 'http://u:p@proxy.example.fr:8080', CLAUDE_CODE_OAUTH_TOKEN: 'ancien', AUTRE: 'ok', VIDE: undefined,
+      ANTHROPIC_API_KEY: 'faux6', ANTHROPIC_AUTH_TOKEN: 'faux7', GITHUB_TOKEN: 'faux8', GH_TOKEN: 'faux9', GITHUB_ACTIONS: 'true',
     } as NodeJS.ProcessEnv
     const { exec, appels } = execSimule({ stdout: resultat() })
     await creerLecteurClaude(JETON, exec, source).lire(requete())
-    expect(appels[0].env).toEqual({ PATH: '/usr/bin', HOME: '/home/ci', AUTRE: 'ok', CLAUDE_CODE_OAUTH_TOKEN: JETON })
+    expect(appels[0].env).toEqual({ PATH: '/usr/bin', HOME: '/home/ci', AUTRE: 'ok', GITHUB_ACTIONS: 'true', CLAUDE_CODE_OAUTH_TOKEN: JETON })
   })
 })
 

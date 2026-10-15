@@ -73,3 +73,12 @@ describe('compterDatesLarges', () => {
     expect(compterDatesLarges('')).toBe(0)
   })
 })
+
+describe('datesDe — jour nu suivi de « au <date> »', () => {
+  it('le jour nu hérite du mois et de l’année de la date qui suit', () => {
+    expect(datesDe('du 1er au 15 septembre 2026', '2026-2027')).toEqual(['2026-09-01', '2026-09-15'])
+    expect(datesDe('du 1 au 15 septembre', '2026-2027')).toEqual(['2026-09-01', '2026-09-15'])
+    expect(datesDe('du 1er septembre au 15 octobre 2026', '2026-2027')).toEqual(['2026-09-01', '2026-10-15'])
+    expect(datesDe('du 10 au 31 janvier 2027 inclus', '2026-2027')).toEqual(['2027-01-10', '2027-01-31'])
+  })
+})

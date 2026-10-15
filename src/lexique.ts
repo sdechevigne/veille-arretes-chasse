@@ -4,7 +4,7 @@ export const RE_DATE_FR = new RegExp(String.raw`\b\d{1,2}(?:er|"|’|')?\s+(?:${
 export const compterDates = (t: string) => (t.match(RE_DATE_FR) ?? []).length
 
 export const ESPECES_RECHERCHE: Record<string, RegExp> = {
-  sanglier: /\bsangliers?\b/i, chevreuil: /\bchevreuils?\b/i, cerf: /(?<![\p{L}-])cerfs?(?![\p{L}-])/iu, daim: /\bdaims?\b/i, mouflon: /\bmouflons?\b/i,
+  sanglier: /\bsangliers?\b/i, chevreuil: /\bchevreuils?\b/i, cerf: /(?<![\p{L}-])cerfs?(?!\p{L}|-(?![eé]laphe|sika))/iu, daim: /\bdaims?\b/i, mouflon: /\bmouflons?\b/i,
   chamois: /\bchamois\b/i, isard: /\bisards?\b/i, lievre: /(?<![\p{L}])li[eéè]vres?(?![\p{L}])/iu, lapin: /\blapins?\b/i, faisan: /\bfaisans?\b/i,
   perdrix: /\bperdrix\b/i, caille: /\bcailles?\b/i, canard: /\bcanards?\b/i, palombe: /\bpalombes?\b|\bpigeons? ramiers?\b/i,
   becasse: /(?<![\p{L}])b[eé]casses?(?![\p{L}])/iu, renard: /\brenards?\b/i, blaireau: /\bblaireaux?\b/i, corbeau: /\bcorbeaux?\b/i,

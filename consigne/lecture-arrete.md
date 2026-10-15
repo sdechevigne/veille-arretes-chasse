@@ -8,7 +8,7 @@ Tu lis un arrêté préfectoral de chasse français déjà découpé en morceaux
 - `=== En-tête (page P) ===` : début de l'acte. Les visas retirés et la troncature sont signalés par `[…]` : les lignes de part et d'autre d'un `[…]` ne se suivent pas dans l'acte. Un document sans article numéroté est fourni en entier sous ce seul repère.
 - `=== Article N (page P) ===` : seuls les articles qui portent une date, plus le dernier article (bloc de signature). Les articles sans date ont été retirés : n'en déduis rien.
 - `--- page P ---` : changement de page à l'intérieur d'un article.
-- Mode `difference` seulement : `=== Périodes actuellement publiées ===`, une ligne par période : `espèce | sous-type | mode | ouverture → fermeture | article`.
+- Mode `difference` seulement : `=== Périodes actuellement publiées ===`, une ligne par période : `espèce | sous-type | mode | ouverture → fermeture | article`. Ce bloc n'est pas dans l'acte : n'y prends jamais de citation.
 
 ## Règle n° 1 : zéro invention
 Tout vient du texte fourni. Une période n'existe que si l'arrêté donne des **dates calendaires explicites** pour cette espèce. Pas de date « de mémoire », pas de date d'une autre saison, pas de date d'un autre département, pas de complétion « habituelle ». Dans le doute, pas de ligne : explique-le dans `notes`.
@@ -44,10 +44,10 @@ Tout vient du texte fourni. Une période n'existe que si l'arrêté donne des **
 
 ## Preuve obligatoire (contrôlée automatiquement)
 Chaque période et chaque suppression porte une preuve :
-- `citation` : **sous-chaîne exacte** du texte fourni, recopiée caractère pour caractère (fautes d'OCR, ponctuation, majuscules comprises), de 40 à 300 caractères, sur une seule page. Pour un tableau, recopie la ligne complète telle qu'elle apparaît. Ne recopie jamais un repère `===` / `---`, ni un passage qui enjambe un `[…]`.
+- `citation` : **sous-chaîne exacte** du texte fourni, recopiée caractère pour caractère (fautes d'OCR, ponctuation, majuscules comprises), de 40 à 300 caractères conseillés (400 au maximum), sur une seule page : jamais à cheval sur un repère `--- page P ---`. Pour un tableau, recopie la ligne complète telle qu'elle apparaît. Ne recopie jamais un repère `===` / `---`, ni un passage qui enjambe un `[…]`, ni une ligne du bloc des périodes publiées.
   - **Les deux dates** de la période (ouverture et fermeture) y figurent **toujours** : c'est non négociable.
   - Le **mot de l'espèce** y figure aussi : le mot du vocabulaire lui-même (« cerf », « chevreuil », « canard »…, ou « pigeon ramier » pour palombe) ; pour `cerf_sika`, le mot « sika ». Un synonyme seul (biche, faon, brocard, chevrette, gibier d'eau…) ne compte pas : choisis un passage qui porte aussi le mot de l'espèce.
-  - Une seule période mal prouvée bloque tout le document : préfère une citation plus longue (jusqu'à 300 caractères) qui réunit l'espèce et les deux dates. Si c'est impossible, cite quand même le passage qui porte les deux dates et signale l'espèce manquante dans `notes` (la page sera relue en image).
+  - Une seule période mal prouvée bloque tout le document : préfère une citation plus longue (jusqu'à 400 caractères) qui réunit l'espèce et les deux dates. Si c'est impossible, cite quand même le passage qui porte les deux dates et signale l'espèce manquante dans `notes` (la page sera relue en image).
 - `page` : le numéro du repère le plus proche **au-dessus** de la citation (`=== En-tête (page P) ===`, `=== Article N (page P) ===` ou `--- page P ---`).
 - `article` : le numéro de l'article (« 3 »), `null` pour l'en-tête. `source_article` : « art. 3 », ou `null`.
 - `annee_deduite` : voir les conventions.
@@ -63,7 +63,7 @@ Une citation retouchée, reformulée ou assemblée de deux morceaux sera rejeté
 - `numero` : numéro de l'arrêté tel qu'écrit, `null` s'il est absent ou laissé en blanc.
 - `date` : date de signature « Fait à …, le … » au format `AAAA-MM-JJ`, sinon `null`.
 - `signe` : `true` seulement si numéro complet **et** date « Fait à … le … » **et** signataire ; sinon `false`.
-- `departement_lu` : nom du département lu dans l'en-tête (« Meurthe-et-Moselle »), `null` si absent. Ne le recopie pas de la ligne 1.
+- `departement_lu` : nom officiel du département lu dans l'en-tête, seul, sans article ni « département » / « préfecture » (`Manche`, `Côtes-d'Armor`, `Meurthe-et-Moselle`), `null` si absent. Ne le recopie pas de la ligne 1.
 - `saison_lue` : campagne lue dans le texte (« 2026-2027 »), `null` si absente. Ne la recopie pas de la ligne 1.
 - `objet` : une phrase qui dit ce que fait l'acte.
 
