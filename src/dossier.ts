@@ -6,7 +6,7 @@ import type { PageTexte } from './types.ts'
 
 export interface EntreeDossier {
   departement: string; nom: string; saison: string
-  type: 'projet' | 'annuel' | 'modificatif' | 'esod'
+  type: 'projet' | 'annuel' | 'modificatif' | 'esod' | 'ponctuel'
   mode: 'complet' | 'difference' | 'script_projet_signe'
   pages: PageTexte[]; publiees?: PeriodePubliee[]; articlesCibles?: string[]
 }
