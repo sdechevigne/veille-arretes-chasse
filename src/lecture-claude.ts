@@ -12,7 +12,7 @@ import { saisonsDepuisTexte } from './saison.ts'
 import { consoliderPeriodes, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
 import { controlerC1, enPanne, panne, type Lu } from './controle-c1.ts'
 import type { PeriodePubliee } from './difference.ts'
-import type { PageTexte, PropositionRobot } from './types.ts'
+import type { PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
 
 export interface DepsLectureClaude {
   depot: Depot; archive: Archive; lecteur: Lecteur; outils: OutilsPdf
@@ -34,31 +34,46 @@ const TOKENS_MAX = 40_000
 /** Quota de l'abonnement atteint : on arrête le passage, le document en cours reste intact. */
 class QuotaAtteint extends Error {}
 
+const TYPES_LISIBLES = ['projet', 'annuel', 'modificatif', 'esod', 'ponctuel'] as const
+const estLisible = (t: string | null): t is typeof TYPES_LISIBLES[number] => (TYPES_LISIBLES as readonly (string | null)[]).includes(t)
 const lirePages = async (archive: Archive, cle: string): Promise<PageTexte[]> => JSON.parse((await archive.lire(cle)).toString('utf8')).pages
 
 export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureClaude): Promise<StatsLectureClaude> {
-  const log = deps.log ?? (() => {}); const now = deps.now ?? (() => new Date())
+  // Journal défaillant : ne doit jamais faire échouer ni re-marquer un document (la trace est un confort, pas un état).
+  const log = (l: string) => { try { deps.log?.(l) } catch { /* journal indisponible */ } }
+  const now = deps.now ?? (() => new Date())
   const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, arretQuota: false, arretPrecoce: false, tokens: { input: 0, output: 0 }, decisions: [] }
   for (const doc of await deps.depot.documentsALire(o.limite, now())) {
     if (o.echeance && now() >= o.echeance) { stats.arretPrecoce = true; log('échéance atteinte : lecture Claude interrompue'); break }
+    let r: ResultatSoumission | null
     try {
-      await lireDocument(deps, doc, stats, log)
-      stats.traites++
+      r = await lireDocument(deps, doc, stats, log)
     } catch (e) {
       if (e instanceof QuotaAtteint) { stats.arretQuota = true; log(`quota Claude atteint : passage arrêté (${e.message})`); break }
       stats.traites++; stats.erreurs++
       const message = `${PREFIXE_ERREUR_LECTURE} ${(e as Error).message} (tentative ${tentativesLecture(doc.erreur) + 1})`
       log(`${doc.departement} erreur : ${message}`)
       try { await deps.depot.marquerErreur(doc.id, message) } catch (e2) { log(`${doc.departement} : marquerErreur a échoué (${(e2 as Error).message}) après « ${message} »`) }
+      continue
     }
+    // Hors du try : une fois la proposition enregistrée, plus rien ne doit marquer le document en erreur (doublon au rejeu).
+    stats.traites++
+    if (!r) continue
+    if (r.decision === 'publie') stats.publie++; else if (r.decision === 'publie_note') stats.publieNote++; else stats.enAttente++
+    stats.decisions.push({ documentId: doc.id, departement: doc.departement, decision: r.decision })
+    log(`${doc.departement} ${r.decision} : ${r.motif}`)
   }
   return stats
 }
 
-async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats: StatsLectureClaude, log: (l: string) => void): Promise<void> {
+async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats: StatsLectureClaude, log: (l: string) => void): Promise<ResultatSoumission | null> {
   const { depot } = deps; const dept = doc.departement; const saison = doc.saison; const type = doc.type_detecte
-  if (type === 'indetermine') { await depot.majStatut(doc.id, 'en_attente', 'type non déterminé mécaniquement'); stats.sansLecture++; log(`${dept} en attente : type non déterminé`); return }
-  if (!doc.texte_r2_key || !type || type === 'hors_sujet') throw new Error(`document non lisible (type ${type ?? 'absent'}, texte ${doc.texte_r2_key ? 'présent' : 'absent'})`)
+  // Sans lecture possible (pas une panne rejouable) : en attente d'un opérateur, aucun appel Claude.
+  if (!estLisible(type) || !doc.texte_r2_key) {
+    const motif = type === 'indetermine' ? 'type non déterminé mécaniquement'
+      : !estLisible(type) ? `type ${type ?? 'absent'} : pas de lecture Claude` : 'texte extrait absent : lecture Claude impossible'
+    await depot.majStatut(doc.id, 'en_attente', motif); stats.sansLecture++; log(`${dept} en attente : ${motif}`); return null
+  }
   const pages = await lirePages(deps.archive, doc.texte_r2_key)
   const articles = decouperArticles(pages)
   const notes: string[] = []
@@ -98,7 +113,7 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   if (type === 'ponctuel') {
     const { acte } = (await lire(dossier('ponctuel', 'script_projet_signe').texte)).sortie
     await depot.marquerIgnore(doc.id, 'ponctuel sans effet sur les dates', { numero: acte.numero, date: acte.date, objet: acte.objet })
-    stats.ignores++; log(`${dept} ignoré : ponctuel (${acte.objet})`); return
+    stats.ignores++; log(`${dept} ignoré : ponctuel (${acte.objet})`); return null
   }
 
   // Mode : complet, différence (sur la version publiée) ou raccourci projet → signé si les articles sont identiques (E3).
@@ -124,7 +139,7 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   if (zones.length) c1 = { ok: false, details: [...c1.details, ...zones] }
   const { acte } = lu.sortie
   if (type === 'projet' && acte.signe) notes.push('projet lu comme signé : statut signé retenu')
-  const payload = payloadDe({ departement: dept, saison, nom: deps.noms[dept] ?? dept, statut: acte.signe ? 'signe' : 'en_attente_signature', acte, url: doc.url, periodes: conso.periodes, notes: '' })
+  const payload = payloadDe({ departement: dept, saison, nom: deps.noms[dept] ?? dept, statut: acte.signe ? 'signe' : 'en_attente_signature', acte, url: doc.url, periodes: conso.periodes, notes: lu.sortie.notes, suppressions: lu.sortie.suppressions })
   const refus = validerVocabulaire(payload)
   if (refus.length) throw new Error(`payload refusé : ${refus.join(' ; ')}`)
 
@@ -134,8 +149,5 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
     lecture: { modele: lu.modele, relance_opus: lu.relanceOpus, double_lecture: doubleLecture, usage, notes: [lu.sortie.notes, ...notes].filter(Boolean).join('\n') },
     suppression_explicite: conso.suppressionExplicite,
   }
-  const r = await depot.soumettre(proposition)
-  if (r.decision === 'publie') stats.publie++; else if (r.decision === 'publie_note') stats.publieNote++; else stats.enAttente++
-  stats.decisions.push({ documentId: doc.id, departement: dept, decision: r.decision })
-  log(`${dept} ${r.decision} : ${r.motif}`)
+  return depot.soumettre(proposition)
 }

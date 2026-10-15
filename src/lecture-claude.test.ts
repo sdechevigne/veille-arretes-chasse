@@ -128,6 +128,7 @@ describe('lireAvecClaude', () => {
     const p = m.depot.etat.propositions[0]
     expect(p.lecture).toMatchObject({ double_lecture: true, relance_opus: false, usage: { input: 300, output: 150 } })
     expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.lecture.notes).toContain('levé par la double lecture : période 2 (chevreuil) : espèce absente de la citation')
     expect(stats.tokens).toEqual({ input: 300, output: 150 })
   })
 
@@ -137,7 +138,7 @@ describe('lireAvecClaude', () => {
     const m = await monter([{}], [ok(s), ok(s), ok(autre)])
     await m.lancer()
     const p = m.depot.etat.propositions[0]
-    expect(p.lecture.double_lecture).toBe(false)
+    expect(p.lecture.double_lecture).toBe(true)
     expect(p.c1.ok).toBe(false)
     expect(p.c1.details.some(d => d.startsWith('double lecture divergente'))).toBe(true)
   })
@@ -166,6 +167,7 @@ describe('lireAvecClaude', () => {
     expect(p).toMatchObject({ mode: 'difference', type_acte: 'modificatif', base_arrete_maj: ARRETE.updated_at, c1: { ok: true } })
     expect(p.payload.periodes.map(x => `${x.espece_code} ${x.date_ouverture}`)).toEqual(['lievre 2026-10-01', 'sanglier 2026-06-15'])
     expect(p.lecture.notes).toMatch(/remplace/)
+    expect(p.payload.notes).toBeNull()
   })
 
   it('modificatif sans version publiée : lecture complète et note', async () => {
@@ -273,6 +275,67 @@ describe('lireAvecClaude', () => {
     const m = await monter([{ statut: 'erreur', erreur: 'lecture claude : boum (tentative 1)', updated_at: '2026-10-13T00:00:00Z' }], [new Error('encore')])
     await m.lancer()
     expect(m.doc(0).erreur).toBe('lecture claude : encore (tentative 2)')
+  })
+
+  it('modificatif ne faisant que supprimer : proposition soumise, extrait source = citation de la suppression', async () => {
+    const pages = [MODIF[0].replace(/Article 1 : .*/, 'Article 1 : La chasse du lièvre est suspendue du 1er octobre 2026 au 1er décembre 2026.')]
+    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1 }
+    const m = await monter([{ type: 'modificatif', pages }], [ok(sortie({ periodes: [], suppressions: [supp] }))])
+    m.depot.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete: ARRETE, periodes: [publiee({}), publiee({ espece_code: 'lievre', date_ouverture: '2026-10-01', date_fermeture: '2026-12-01' })] })
+    await m.lancer()
+    expect(m.depot.etat.propositions).toHaveLength(1)
+    const p = m.depot.etat.propositions[0]
+    expect(p).toMatchObject({ mode: 'difference', suppression_explicite: true, c1: { ok: true } })
+    expect(p.payload.preuve.extrait_source).toBe(supp.citation)
+    expect(p.payload.periodes.map(x => x.espece_code)).toEqual(['sanglier'])
+  })
+
+  it('suppression et période lues : l’extrait source reste la citation d’une période', async () => {
+    const pages = [MODIF[0].replace('Fait à', 'Article 2 : La chasse du lièvre est suspendue.\nFait à')]
+    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1 }
+    const m = await monter([{ type: 'modificatif', pages }], [ok(sortie({ periodes: [P_MODIF], suppressions: [supp] }))])
+    m.depot.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete: ARRETE, periodes: [publiee({}), publiee({ espece_code: 'lievre', date_ouverture: '2026-10-01', date_fermeture: '2026-12-01' })] })
+    await m.lancer()
+    const p = m.depot.etat.propositions[0]
+    expect(p).toMatchObject({ suppression_explicite: true, c1: { ok: true } })
+    expect(p.payload.preuve.extrait_source).toBe(P_MODIF.preuve.citation)
+    expect(p.payload.periodes.map(x => `${x.espece_code} ${x.date_ouverture}`)).toEqual(['sanglier 2026-06-15'])
+  })
+
+  it('notes de Claude dans le payload publié ; notes du robot seulement dans la lecture', async () => {
+    const m = await monter([{ pages: [AP[0].replace(' pour la campagne 2026-2027', '')] }], [ok(sortie({ notes: 'Le loup relève de l’arrêté ministériel.' }))])
+    await m.lancer()
+    const p = m.depot.etat.propositions[0]
+    expect(p.payload.notes).toBe('Le loup relève de l’arrêté ministériel.')
+    expect(p.lecture.notes).toMatch(/^Le loup relève de l’arrêté ministériel\.\n.*saison/)
+  })
+
+  it('décision publie_note comptée à part', async () => {
+    const m = await monter([{}], [ok(sortie())])
+    const soumettre = m.depot.soumettre.bind(m.depot)
+    m.depot.soumettre = async p => ({ ...(await soumettre(p)), decision: 'publie_note' as const })
+    const stats = await m.lancer()
+    expect(stats).toMatchObject({ publie: 0, publieNote: 1, enAttente: 0 })
+    expect(stats.decisions).toEqual([{ documentId: 'doc-1', departement: '54', decision: 'publie_note' }])
+  })
+
+  it('journal défaillant après une soumission réussie : document jamais marqué en erreur', async () => {
+    const m = await monter([{}], [ok(sortie())])
+    const stats = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: m.lecteur, outils: {} as OutilsPdf, consigne: CONSIGNE, noms: NOMS,
+      fichierTemp: async () => { throw new Error('inutile') }, now: () => NOW, log: () => { throw new Error('journal en panne') } }, { limite: 10 })
+    expect(stats).toMatchObject({ publie: 1, erreurs: 0 })
+    expect(m.depot.etat.propositions).toHaveLength(1)
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'propose', erreur: null })
+  })
+
+  it('hors sujet ou texte absent : en_attente sans appel Claude, compté sans lecture', async () => {
+    const m = await monter([{ type: 'hors_sujet' }, {}], [])
+    m.doc(1).texte_r2_key = null
+    const stats = await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(0)
+    expect(stats).toMatchObject({ sansLecture: 2, erreurs: 0 })
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'en_attente', erreur: 'type hors_sujet : pas de lecture Claude' })
+    expect(m.doc(1)).toMatchObject({ statut_traitement: 'en_attente', erreur: 'texte extrait absent : lecture Claude impossible' })
   })
 
   it('échéance dépassée : rien n’est lu, arrêt précoce', async () => {

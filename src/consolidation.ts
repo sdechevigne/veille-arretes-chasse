@@ -23,11 +23,14 @@ export function zonesNonReprises(publiees: PeriodePubliee[], periodes: PeriodePu
     .map(p => `zone publiée non reprise : ${p.espece_code} ${modeDe(p)} (${p.zone_libelle})`)
 }
 
-/** Payload prêt pour la RPC ; l'extrait source est la citation de la première période (ordre du payload). */
-export function payloadDe(e: Omit<EntreePayload, 'preuveCore'> & { nom: string }): PayloadCore {
+/** Payload prêt pour la RPC. Extrait source : citation de la première période prouvée (ordre du payload), à défaut
+ *  celle de la première suppression (modificatif ne faisant que supprimer). `notes` = mentions de Claude pour l'arrêté publié. */
+export function payloadDe(e: Omit<EntreePayload, 'preuveCore'> & { nom: string; suppressions: LectureClaude['suppressions'] }): PayloadCore {
   const preuveCore = { code_detecte: e.departement, dept_detecte: e.acte.departement_lu ?? e.nom, millesime_detecte: e.saison, signature_detectee: e.acte.date ?? '', extrait_source: '' }
-  const payload = construirePayload({ ...e, preuveCore })
-  return { ...payload, preuve: { ...preuveCore, extrait_source: payload.periodes.find(p => p.preuve)?.preuve?.citation ?? '' } }
+  const { suppressions, nom: _nom, ...entree } = e
+  const payload = construirePayload({ ...entree, preuveCore })
+  const extrait = payload.periodes.find(p => p.preuve)?.preuve?.citation ?? suppressions[0]?.citation ?? ''
+  return { ...payload, preuve: { ...preuveCore, extrait_source: extrait } }
 }
 
 // Forme comparable d'une période : celle du payload, sans la preuve (citation et page varient d'une lecture à l'autre).

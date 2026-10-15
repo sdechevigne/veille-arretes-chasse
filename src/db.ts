@@ -124,7 +124,8 @@ export function creerDepotSupabase(url: string, serviceRoleKey: string): Depot {
       const { data: prop, error } = await sb.from('arretes_propositions').select('document_id, payload').eq('departement', departement).eq('saison', saison)
         .eq('type_acte', 'projet').is('annulee_le', null).neq('decision', 'rejete').order('created_at', { ascending: false }).limit(1).maybeSingle(); lancer('propositionProjet', error)
       if (!prop) return null
-      const { data: doc, error: e2 } = await sb.from('arretes_documents').select('texte_r2_key').eq('id', prop.document_id).single(); lancer('propositionProjet/document', e2)
+      // Document disparu ou sans texte : pas de raccourci (lecture complète).
+      const { data: doc, error: e2 } = await sb.from('arretes_documents').select('texte_r2_key').eq('id', prop.document_id).maybeSingle(); lancer('propositionProjet/document', e2)
       return doc?.texte_r2_key ? { texte_r2_key: doc.texte_r2_key, periodes: prop.payload?.periodes ?? [] } : null
     },
     async soumettre(p) { const { data, error } = await sb.rpc('robot_soumettre_proposition', { p_proposition: p }); lancer('soumettre', error); return data },

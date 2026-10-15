@@ -93,6 +93,8 @@ describe('creerDepotMemoire — lecture Claude', () => {
     expect(await d.propositionProjet('54', '2026-2027')).toBeNull()
     d.etat.propositions.push(prop({}), prop({ document_id: 'doc-2', created_at: '2026-05-03T00:00:00Z', decision: 'rejete' }), prop({ document_id: 'doc-2', created_at: '2026-05-04T00:00:00Z', annulee_le: '2026-05-05T00:00:00Z' }), prop({ type_acte: 'annuel', document_id: 'doc-2', created_at: '2026-05-06T00:00:00Z' }))
     expect(await d.propositionProjet('54', '2026-2027')).toEqual({ texte_r2_key: 't1', periodes: [{ espece_code: 'sanglier' }] })
+    d.etat.propositions.push(prop({ document_id: 'disparu', created_at: '2026-05-07T00:00:00Z' }))
+    expect(await d.propositionProjet('54', '2026-2027')).toBeNull()
   })
   it('marquerIgnore garde l’acte ; majStatut pose statut et motif', async () => {
     const d = await depotAvec([{ statut: 'a_lire', decouvert_le: '2026-10-01T00:00:00Z' }, { statut: 'a_lire', decouvert_le: '2026-10-01T00:00:00Z' }])

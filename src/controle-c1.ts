@@ -40,7 +40,7 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
     else { lu = { sortie: r.sortie, modele: r.modele, relanceOpus: true }; v = verifierPreuves(lu.sortie, pages, doc.saison) }
   }
   const aRelire = v.aRelire.length ? v.aRelire : doc.qualite_texte === 'ocr_douteux' ? dossier.pagesIncluses : []
-  const echec = (detail: string): ResultatC1 => ({ lu, c1: { ok: false, details: [...v.details, detail] }, doubleLecture: false })
+  const echec = (detail: string, doubleLecture = false): ResultatC1 => ({ lu, c1: { ok: false, details: [...v.details, detail] }, doubleLecture })
   if (!aRelire.length) return { lu, c1: { ok: v.ok, details: v.details }, doubleLecture: false }
   if (aRelire.length > PAGES_IMAGE_MAX) return echec(`trop de pages à relire en image (${aRelire.length})`)
 
@@ -51,8 +51,10 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
   const b = await appeler({ modele: 'sonnet', texte: dossier.texte, images })
   if (enPanne(b)) return echec(`double lecture impossible : ${panne(b)}`)
   const ecarts = ecartsDoubleLecture(a.sortie, b.sortie)
-  if (ecarts.length) return echec(`double lecture divergente : ${ecarts.join(' ; ')}`)
-  // Concordantes : la lecture sur image fait foi ; l'espèce absente d'une citation OCR n'est plus un échec.
-  const details = horsImage(verifierPreuves(a.sortie, pages, doc.saison).details)
+  if (ecarts.length) return echec(`double lecture divergente : ${ecarts.join(' ; ')}`, true)
+  // Concordantes : la lecture sur image fait foi ; l'espèce absente d'une citation OCR n'est plus un échec, mais reste tracée.
+  const tous = verifierPreuves(a.sortie, pages, doc.saison).details
+  const details = horsImage(tous)
+  notes.push(...tous.filter(d => !details.includes(d)).map(d => `levé par la double lecture : ${d}`))
   return { lu: { ...lu, sortie: a.sortie }, c1: { ok: details.length === 0, details }, doubleLecture: true }
 }
