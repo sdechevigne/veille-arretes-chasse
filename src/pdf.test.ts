@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { lirePage, qualitePage, qualiteDocument, run } from './pdf.ts'
+import { argsImagePage, lirePage, qualitePage, qualiteDocument, run } from './pdf.ts'
 import { compterDates, compterEspeces } from './lexique.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { PageTexte } from './types.ts'
 
-const outils = (natif: string, ocr: string): OutilsPdf => ({ async nbPages() { return 1 }, async texteNatif() { return natif }, async ocrPage() { return ocr } })
+const outils = (natif: string, ocr: string): OutilsPdf => ({ async nbPages() { return 1 }, async texteNatif() { return natif }, async ocrPage() { return ocr }, async imagePage() { return Buffer.alloc(0) } })
 const long = (s: string) => Array(40).fill(s).join(' ')
 
 describe('lirePage', () => {
@@ -18,7 +18,7 @@ describe('lirePage', () => {
     expect(p.source).toBe('ocr'); expect(p.nbDates).toBe(2)
   })
   it('échec outil : page en erreur, pas d’exception', async () => {
-    const p = await lirePage({ async nbPages() { return 1 }, async texteNatif() { throw new Error('pdftotext absent') }, async ocrPage() { return '' } }, 'x.pdf', 1)
+    const p = await lirePage({ async nbPages() { return 1 }, async texteNatif() { throw new Error('pdftotext absent') }, async ocrPage() { return '' }, async imagePage() { return Buffer.alloc(0) } }, 'x.pdf', 1)
     expect(p.source).toBe('erreur'); expect(p.erreur).toMatch(/pdftotext/)
   })
 })
@@ -62,5 +62,11 @@ describe('run', () => {
   })
   it('code de sortie non nul : rejet avec le message', async () => {
     await expect(run('node', ['-e', "console.error('boum'); process.exit(3)"])).rejects.toThrow(/\(3\) : boum/)
+  })
+})
+describe('argsImagePage', () => {
+  // Pas de rendu réel en test : seuls les arguments passés à pdftoppm sont vérifiés.
+  it('une seule page, 110 dpi, PNG, fichier unique', () => {
+    expect(argsImagePage('/tmp/a.pdf', 7, '/tmp/d/p')).toEqual(['-r', '110', '-png', '-f', '7', '-l', '7', '-singlefile', '/tmp/a.pdf', '/tmp/d/p'])
   })
 })

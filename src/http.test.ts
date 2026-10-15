@@ -94,4 +94,9 @@ describe('expurger', () => {
     expect(r).not.toContain('p@ss'); expect(r).not.toContain('p%40ss')
   })
   it('sans proxy : inchangé', () => { expect(expurger('abc')).toBe('abc') })
+  it('jeton masqué en plus du proxy ; valeurs absentes ignorées', () => {
+    const r = expurger('proxy.example.fr refuse sk-ant-oat-FAUX', PROXY, 'sk-ant-oat-FAUX', undefined)
+    expect(r).not.toContain('sk-ant-oat-FAUX'); expect(r).not.toContain('proxy.example.fr')
+    expect(expurger('jeton sk-ant-oat-FAUX', undefined, 'sk-ant-oat-FAUX')).toBe('jeton <secret>')
+  })
 })

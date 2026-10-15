@@ -8,16 +8,19 @@ export type Exec = (args: string[]) => Promise<{ code: number; stdout: Buffer; s
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36'
 const MARQUEUR = '\n' // -w écrit "\n<code> <url>" après le corps
 
-export function expurger(msg: string, proxy?: string): string {
-  if (!proxy) return msg
-  const secrets = new Set<string>([proxy])
-  const decoder = (v: string): string => { try { return decodeURIComponent(v) } catch { return v } }
-  try {
-    const u = new URL(proxy.includes('://') ? proxy : `http://${proxy}`)
-    for (const v of [u.username, u.password]) { secrets.add(v); secrets.add(decoder(v)) }
-    for (const v of [u.host, u.hostname, u.port]) secrets.add(v)
-  } catch { /* proxy illisible : seule la chaîne brute est masquée */ }
-  for (const s of [...secrets].filter(Boolean).sort((a, b) => b.length - a.length)) msg = msg.split(s).join('<proxy>')
+// Masque le proxy (hôte, port, identifiants) puis tout autre secret fourni (jeton…) ; les valeurs absentes sont ignorées.
+export function expurger(msg: string, proxy?: string, ...autres: (string | undefined)[]): string {
+  if (proxy) {
+    const secrets = new Set<string>([proxy])
+    const decoder = (v: string): string => { try { return decodeURIComponent(v) } catch { return v } }
+    try {
+      const u = new URL(proxy.includes('://') ? proxy : `http://${proxy}`)
+      for (const v of [u.username, u.password]) { secrets.add(v); secrets.add(decoder(v)) }
+      for (const v of [u.host, u.hostname, u.port]) secrets.add(v)
+    } catch { /* proxy illisible : seule la chaîne brute est masquée */ }
+    for (const s of [...secrets].filter(Boolean).sort((a, b) => b.length - a.length)) msg = msg.split(s).join('<proxy>')
+  }
+  for (const s of autres.filter((v): v is string => !!v).sort((a, b) => b.length - a.length)) msg = msg.split(s).join('<secret>')
   return msg
 }
 

@@ -8,7 +8,7 @@ const NOMS = { '54': 'Meurthe-et-Moselle', '50': 'Manche', '36': 'Indre' }
 const fichierTemp = async (o: Buffer) => ({ chemin: `/tmp/fake-${o.length}`, liberer: () => {} })
 function outilsFactices(pages: string[], natif = true): OutilsPdf & { ocr: number[] } {
   const ocr: number[] = []
-  return { ocr, async nbPages() { return pages.length }, async texteNatif(_, n) { return natif ? pages[n - 1] : '' }, async ocrPage(_, n) { ocr.push(n); return pages[n - 1] } }
+  return { ocr, async nbPages() { return pages.length }, async texteNatif(_, n) { return natif ? pages[n - 1] : '' }, async ocrPage(_, n) { ocr.push(n); return pages[n - 1] }, async imagePage() { return Buffer.alloc(0) } }
 }
 async function docTest(texte: string[], natif = true, dept = '54') {
   const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
@@ -52,7 +52,7 @@ describe('lireMecaniquement', () => {
     const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
     for (const s of ['d', 'e']) { const k = `arretes/2026-2027/54/${s.repeat(64)}.pdf`; archive.objets.set(k, Buffer.from('%PDF-')); await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: `https://x/${s}.pdf`, titre: 'AP', sha256: s.repeat(64), r2_key: k, taille_octets: 5 }) }
     let n = 0
-    const outils: OutilsPdf = { async nbPages() { if (++n === 1) throw new Error('pdfinfo cassé'); return 1 }, async texteNatif() { return `PRÉFET DE MEURTHE-ET-MOSELLE arrêté ouverture clôture chasse 2026-2027 ${long('vv')}` }, async ocrPage() { return '' } }
+    const outils: OutilsPdf = { async nbPages() { if (++n === 1) throw new Error('pdfinfo cassé'); return 1 }, async texteNatif() { return `PRÉFET DE MEURTHE-ET-MOSELLE arrêté ouverture clôture chasse 2026-2027 ${long('vv')}` }, async ocrPage() { return '' }, async imagePage() { return Buffer.alloc(0) } }
     const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp })
     expect(stats.erreurs).toBe(1); expect(stats.aLire).toBe(1); expect((depot.etat.documents[0] as any).erreur).toMatch(/pdfinfo/)
   })
@@ -60,7 +60,7 @@ describe('lireMecaniquement', () => {
     const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
     const k = `arretes/2026-2027/54/${'f'.repeat(64)}.pdf`; archive.objets.set(k, Buffer.from('%PDF-'))
     await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: 'https://x/f.pdf', titre: 'AP', sha256: 'f'.repeat(64), r2_key: k, taille_octets: 5 })
-    const outils: OutilsPdf = { async nbPages() { return 3 }, async texteNatif() { throw new Error('pdftotext introuvable') }, async ocrPage() { throw new Error('tesseract introuvable') } }
+    const outils: OutilsPdf = { async nbPages() { return 3 }, async texteNatif() { throw new Error('pdftotext introuvable') }, async ocrPage() { throw new Error('tesseract introuvable') }, async imagePage() { return Buffer.alloc(0) } }
     const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp })
     const doc = depot.etat.documents[0] as any
     expect(stats.erreurs).toBe(1); expect(doc.statut_traitement).toBe('erreur'); expect(doc.erreur).toMatch(/lecture impossible.*(tesseract|pdftotext)/)
@@ -92,7 +92,7 @@ describe('lireMecaniquement', () => {
     const depot = creerDepotMemoire(); const archive = creerArchiveMemoire()
     for (const c of ['1', '2']) { const k = `arretes/2026-2027/54/${c.repeat(64)}.pdf`; archive.objets.set(k, Buffer.from('%PDF-')); await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: `https://x/${c}.pdf`, titre: 'AP', sha256: c.repeat(64), r2_key: k, taille_octets: 5 }) }
     depot.marquerErreur = async () => { throw new Error('base injoignable') }
-    const outils: OutilsPdf = { async nbPages() { throw new Error('pdfinfo cassé') }, async texteNatif() { return '' }, async ocrPage() { return '' } }
+    const outils: OutilsPdf = { async nbPages() { throw new Error('pdfinfo cassé') }, async texteNatif() { return '' }, async ocrPage() { return '' }, async imagePage() { return Buffer.alloc(0) } }
     const journal: string[] = []
     const stats = await lireMecaniquement({ depot, archive, outils, noms: NOMS, fichierTemp, log: l => journal.push(l) })
     expect(stats).toMatchObject({ traites: 2, erreurs: 2 }); expect(journal.join('\n')).toMatch(/base injoignable/)

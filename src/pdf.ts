@@ -1,12 +1,12 @@
 // Lecture d'un PDF page par page : couche texte (pdftotext -layout) sinon OCR (pdftoppm 300 dpi + tesseract fra).
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { compterDates, compterEspeces } from './lexique.ts'
 import type { PageTexte, QualiteTexte } from './types.ts'
 
-export interface OutilsPdf { nbPages(pdf: string): Promise<number>; texteNatif(pdf: string, page: number): Promise<string>; ocrPage(pdf: string, page: number): Promise<string> }
+export interface OutilsPdf { nbPages(pdf: string): Promise<number>; texteNatif(pdf: string, page: number): Promise<string>; ocrPage(pdf: string, page: number): Promise<string>; imagePage(pdf: string, page: number): Promise<Buffer> }
 
 export const DELAI_COMMANDE_MS = 120_000
 
@@ -23,6 +23,9 @@ export function run(cmd: string, args: string[], delaiMs = DELAI_COMMANDE_MS): P
   })
 }
 
+// Arguments de pdftoppm pour une page en PNG 110 dpi (≈ 150-250 Ko en A4, assez pour lire un tableau) ; `racine` = chemin sans extension, `-singlefile` produit `<racine>.png`.
+export const argsImagePage = (pdf: string, page: number, racine: string): string[] => ['-r', '110', '-png', '-f', String(page), '-l', String(page), '-singlefile', pdf, racine]
+
 export const creerOutilsPoppler = (delaiMs = DELAI_COMMANDE_MS): OutilsPdf => ({
   async nbPages(pdf) { const m = /Pages:\s+(\d+)/.exec(await run('pdfinfo', [pdf], delaiMs)); if (!m) throw new Error('pdfinfo : nombre de pages introuvable'); return +m[1] },
   async texteNatif(pdf, n) { return run('pdftotext', ['-f', String(n), '-l', String(n), '-layout', pdf, '-'], delaiMs) },
@@ -32,6 +35,13 @@ export const creerOutilsPoppler = (delaiMs = DELAI_COMMANDE_MS): OutilsPdf => ({
       await run('pdftoppm', ['-f', String(n), '-l', String(n), '-r', '300', '-gray', '-png', pdf, join(tmp, 'p')], delaiMs)
       const png = readdirSync(tmp).find(f => f.endsWith('.png')); if (!png) throw new Error('pdftoppm : aucune image produite')
       return await run('tesseract', [join(tmp, png), '-', '-l', 'fra', '--psm', '6'], delaiMs)
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+  },
+  async imagePage(pdf, n) {
+    const tmp = mkdtempSync(join(tmpdir(), 'veille-img-'))
+    try {
+      await run('pdftoppm', argsImagePage(pdf, n, join(tmp, 'p')), delaiMs)
+      return readFileSync(join(tmp, 'p.png'))
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   },
 })
