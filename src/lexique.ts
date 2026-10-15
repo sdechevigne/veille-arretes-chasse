@@ -1,5 +1,5 @@
 // Lexique de repérage : dates françaises, espèces du vocabulaire, mots-clés chasse. Tolérant aux fautes OCR courantes.
-const MOIS = 'janvier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre'
+export const MOIS = 'janvier|f[ée]vrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|d[ée]cembre'
 export const RE_DATE_FR = new RegExp(String.raw`\b\d{1,2}(?:er|"|’|')?\s+(?:${MOIS})\b(?:\s+|[\s\S]{0,40}?)20\d\d\b|\b\d{2}[/-]\d{2}[/-]20\d\d\b`, 'gi')
 export const compterDates = (t: string) => (t.match(RE_DATE_FR) ?? []).length
 
