@@ -18,8 +18,10 @@ export async function notifierManta(cfg: { url: string; secret: string }, corps:
   }
 }
 
-/** Texte de la notification de fin de lecture Claude (publiées = publiées sans et avec note). */
-export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; arretQuota: boolean; restantsALire?: number }): string {
+/** Texte de la notification de fin de lecture Claude (publiées = publiées sans et avec note).
+ *  Les documents sans lecture automatique (en attente d'un opérateur) sont ajoutés quand il y en a. */
+export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; sansLecture?: number; arretQuota: boolean; restantsALire?: number }): string {
+  const sansLecture = s.sansLecture ? `, ${s.sansLecture} document(s) sans lecture automatique à traiter à la main` : ''
   const quota = s.arretQuota ? ` [quota Claude atteint${s.restantsALire !== undefined ? `, reste ${s.restantsALire} documents` : ''}]` : ''
-  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${quota}`
+  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${sansLecture}${quota}`
 }

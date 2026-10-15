@@ -129,7 +129,7 @@ async function dossier(env: Env) {
   console.log(`${entete.join('\n')}\n---\n${d.texte}`)
 }
 
-/** Bilan hebdomadaire (comptes seulement) : stdout, fichier d'état commité (`--etat`), notification Manta (`--notifier`). */
+/** Bilan hebdomadaire (comptes seulement ; propositions annulées exclues) : stdout, fichier d'état commité (`--etat`), notification Manta (`--notifier`). */
 async function bilan(env: Env) {
   const sb = clientSupabase(env)
   const depuis = new Date(Date.now() - 7 * 86400e3).toISOString()
@@ -138,7 +138,7 @@ async function bilan(env: Env) {
   const documents = await toutesLesPages<{ statut_traitement: string; type_detecte: string | null }>('bilan/documents', (de, a) =>
     sb.from('arretes_documents').select('statut_traitement, type_detecte').gte('decouvert_le', depuis).order('id').range(de, a))
   const propositions = await toutesLesPages<{ decision: string; usage: Record<string, number> | null }>('bilan/propositions', (de, a) =>
-    sb.from('arretes_propositions').select('decision, usage:lecture->usage').gte('created_at', depuis).order('id').range(de, a))
+    sb.from('arretes_propositions').select('decision, usage:lecture->usage').is('annulee_le', null).gte('created_at', depuis).order('id').range(de, a))
   const synthese = syntheseBilan({ maintenant: new Date(), sourcesEnPanne: sourcesEnPanne ?? 0, documents, propositions: propositions.map(p => ({ decision: p.decision, lecture: { usage: p.usage ?? undefined } })) })
   const json = JSON.stringify(synthese, null, 2)
   const etat = opt('etat')

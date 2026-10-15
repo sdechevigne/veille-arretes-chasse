@@ -47,6 +47,12 @@ describe('textePropositions', () => {
   it('compte les propositions à vérifier et publiées (avec note)', () => {
     expect(textePropositions({ enAttente: 2, publie: 1, publieNote: 2, arretQuota: false })).toBe('Veille arrêtés : 2 proposition(s) à vérifier, 3 publiée(s)')
   })
+  it('signale les documents sans lecture automatique (en attente d’un opérateur)', () => {
+    expect(textePropositions({ enAttente: 0, publie: 0, publieNote: 0, sansLecture: 2, arretQuota: false }))
+      .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 0 publiée(s), 2 document(s) sans lecture automatique à traiter à la main')
+    expect(textePropositions({ enAttente: 1, publie: 1, publieNote: 0, sansLecture: 1, arretQuota: true, restantsALire: 3 }))
+      .toBe('Veille arrêtés : 1 proposition(s) à vérifier, 1 publiée(s), 1 document(s) sans lecture automatique à traiter à la main [quota Claude atteint, reste 3 documents]')
+  })
   it('signale le quota et le reste quand il est connu', () => {
     expect(textePropositions({ enAttente: 0, publie: 4, publieNote: 0, arretQuota: true, restantsALire: 12 }))
       .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 4 publiée(s) [quota Claude atteint, reste 12 documents]')

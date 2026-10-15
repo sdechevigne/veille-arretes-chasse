@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     outputs:
-      go: ${{ steps.rythme.outputs.go }}
+      # Calculée par la toute première étape (toujours exécutée, même si go=false) : le bilan du lundi n'en dépend pas.
       lundi: ${{ steps.rythme.outputs.lundi }}
     defaults:
       run:
@@ -41,10 +41,16 @@ jobs:
         id: rythme
         env:
           EVENEMENT: ${{ github.event_name }}
+          DEPARTEMENTS: ${{ github.event.inputs.departements }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           mois=$(date -u +%m); jour=$(date -u +%u)
+          # Codes de départements : validés une seule fois ici, relus par « Collecte » et « Lecture Claude » (sortie `departements`).
+          if [ -n "$DEPARTEMENTS" ]; then
+            [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
+          fi
+          echo "departements=$DEPARTEMENTS" >> "$GITHUB_OUTPUT"
           # `secrets` n'est pas utilisable dans `if:` : la présence du jeton Claude passe par une sortie d'étape.
           if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "claude=true" >> "$GITHUB_OUTPUT"; else echo "claude=false" >> "$GITHUB_OUTPUT"; fi
           if [ "$jour" = "1" ]; then echo "lundi=true" >> "$GITHUB_OUTPUT"; else echo "lundi=false" >> "$GITHUB_OUTPUT"; fi
@@ -73,7 +79,7 @@ jobs:
       - name: Collecte
         if: steps.rythme.outputs.go == 'true'
         env:
-          DEPARTEMENTS: ${{ github.event.inputs.departements }}
+          DEPARTEMENTS: ${{ steps.rythme.outputs.departements }}
           SANS_PROXY: ${{ github.event.inputs.sans_proxy }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -84,10 +90,7 @@ jobs:
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: |
           args=()
-          if [ -n "$DEPARTEMENTS" ]; then
-            [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
-            args+=(--departements "$DEPARTEMENTS")
-          fi
+          [ -n "$DEPARTEMENTS" ] && args+=(--departements "$DEPARTEMENTS")
           [ "$SANS_PROXY" = "true" ] && args+=(--sans-proxy)
           npm run veille -- collecter --budget-min 45 "${args[@]}" | tee collecte.json
       - name: Lecture mécanique
@@ -107,7 +110,7 @@ jobs:
       - name: Lecture Claude
         if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
         env:
-          DEPARTEMENTS: ${{ github.event.inputs.departements }}
+          DEPARTEMENTS: ${{ steps.rythme.outputs.departements }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -117,20 +120,20 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
         run: |
           args=()
-          if [ -n "$DEPARTEMENTS" ]; then
-            [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
-            args+=(--departements "$DEPARTEMENTS")
-          fi
+          [ -n "$DEPARTEMENTS" ] && args+=(--departements "$DEPARTEMENTS")
           # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON (lu par l'étape Notification).
           npm run -s veille -- lire-claude --limite 40 --budget-min 50 "${args[@]}" | tee lecture-claude.json
       - name: Notification
         if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
+        continue-on-error: true   # une notification ratée ne doit jamais empêcher « Santé des sources »
         env:
           MANTA_WEBHOOK_URL: ${{ secrets.MANTA_WEBHOOK_URL }}
           MANTA_WEBHOOK_SECRET: ${{ secrets.MANTA_WEBHOOK_SECRET }}
         run: |
           if [ ! -s lecture-claude.json ]; then echo "pas de lecture-claude.json : aucune notification"; exit 0; fi
-          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.arretQuota ? "oui" : "non")')
+          # Fichier tronqué / invalide : lecture en échec → « non » (jamais d'échec d'étape). Sans lecture automatique =
+          # documents mis en attente d'un opérateur, à signaler comme les propositions.
+          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.arretQuota ? "oui" : "non")' 2>/dev/null || echo non)
           if [ "$a_notifier" = "oui" ]; then npm run -s veille -- notifier --fichier lecture-claude.json; else echo "rien à signaler"; fi
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
@@ -157,7 +160,9 @@ jobs:
   # Bilan du lundi (planifié) : notification et fichier d'état commité. Seul job autorisé à écrire dans le dépôt.
   bilan:
     needs: veille
-    if: always() && github.event_name == 'schedule' && needs.veille.outputs.go == 'true' && needs.veille.outputs.lundi == 'true'
+    # Ne lit que Supabase : indépendant de `go` (le cron reste « suspendu » côté collecte tant que le proxy est absent,
+    # mais le commit hebdomadaire doit quand même partir pour garder le planning actif).
+    if: always() && github.event_name == 'schedule' && needs.veille.outputs.lundi == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -167,6 +172,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -191,4 +198,6 @@ jobs:
           git add etat/dernier-bilan.json
           if git diff --cached --quiet -- etat/dernier-bilan.json; then echo "bilan inchangé"; exit 0; fi
           git commit -m "chore: bilan hebdomadaire" -- etat/dernier-bilan.json
+          # main a pu avancer pendant le job veille (jusqu'à 3 h) : on se replace dessus avant de pousser.
+          git pull --rebase origin main
           git push origin HEAD:main
