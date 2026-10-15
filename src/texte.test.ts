@@ -18,3 +18,47 @@ describe('trouverCitation', () => {
   it("tolère une faute d'OCR légère", () => expect(trouverCitation('Le libre est ouvert du 11 octobre 2026 au 29 novembre 2026', page).ok).toBe(true))
   it('refuse une citation inventée', () => expect(trouverCitation('du 11 octobre 2026 au 31 janvier 2027', page).ok).toBe(false))
 })
+describe('normaliser (variantes)', () => {
+  it("ramène les apostrophes OCR à l'apostrophe droite", () => {
+    expect(normaliser('l‘ouverture l`ouverture lʼouverture l´ouverture')).toBe("l'ouverture l'ouverture l'ouverture l'ouverture")
+  })
+  it('ne touche que le « er » collé à un nombre', () => {
+    expect(normaliser('Premier 1er 21er')).toBe('premier 1 21')
+  })
+})
+describe('trouverCitation (limites)', () => {
+  const page = 'Article 3 — Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement.'
+  it('refuse une citation vide, une page vide, ou les deux', () => {
+    expect(trouverCitation('', page)).toEqual({ ok: false, score: 0 })
+    expect(trouverCitation('   ', page)).toEqual({ ok: false, score: 0 })
+    expect(trouverCitation('du 11 octobre 2026', '').ok).toBe(false)
+    expect(trouverCitation('', '')).toEqual({ ok: false, score: 0 })
+  })
+  it('gère une citation plus longue que la page', () => {
+    expect(trouverCitation('Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement, sauf dérogation.', page).ok).toBe(false)
+    expect(trouverCitation('lievre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement. et plus', page).score).toBeLessThan(1)
+    expect(trouverCitation('abcd', 'abc').ok).toBe(false)
+  })
+  it('refuse sous le seuil, près de la frontière', () => {
+    const r = trouverCitation('le liavre est ouvart du ll octobre', page)
+    expect(r.score).toBeGreaterThan(0.7)
+    expect(r.score).toBeLessThan(0.9)
+    expect(r.ok).toBe(false)
+  })
+  it('refuse un chiffre, un jour ou une année altérés, même très proche du texte', () => {
+    expect(trouverCitation('Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2027', page).ok).toBe(false)
+    expect(trouverCitation('Le lièvre est ouvert du 11 octobre 2026 au 28 novembre 2026', page).ok).toBe(false)
+    expect(trouverCitation('Le lièvre est ouvert du 12 octobre 2026 au 29 novembre 2026', page).ok).toBe(false)
+  })
+  it('accepte une faute d’OCR sur le texte avec les nombres intacts, y compris si la fenêtre se décale', () => {
+    const r = trouverCitation('Le libre est ouvert du 11 octobre 2026 au 29 novembre 2026', page)
+    expect(r.ok).toBe(true)
+    expect(r.score).toBeGreaterThanOrEqual(0.9)
+    expect(r.score).toBeLessThan(1)
+  })
+  it('retrouve une citation courte avec une faute grâce au pas de 1 caractère', () => {
+    const r = trouverCitation('le lievre esx ouvert du', page)
+    expect(r.ok).toBe(true)
+    expect(r.score).toBeLessThan(1)
+  })
+})
