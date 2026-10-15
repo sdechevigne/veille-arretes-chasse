@@ -41,6 +41,19 @@ describe('construireDossier', () => {
     expect(d.texte).toContain("Considérant l'avis de la commission départementale ;")
     expect(d.texte).not.toMatch(/^\s*vu\b/im)
     expect(d.texte).not.toContain('R 424-3')
+    expect(d.texte).toContain("Campagne 2026-2027\n[…]\nConsidérant l'avis")
+  })
+
+  it("sans lignes vides, s'arrête à la première ligne qui n'est pas une suite de visa", () => {
+    const sansBlanc = construireDossier({ ...base, mode: 'complet', pages: [page(1, `ARRÊTÉ n° 2026-12
+VU le code de l'environnement,
+VU l'arrêté nommant Monsieur [NOM]
+[PRÉNOM], directeur départemental ;
+Après avis de la commission départementale de la chasse et de la faune sauvage,
+Le préfet de la Manche
+Article 1 : La chasse est ouverte du 20 septembre 2026 au 28 février 2027.`)] })
+    expect(sansBlanc.texte).toContain('ARRÊTÉ n° 2026-12\n[…]\nAprès avis de la commission départementale de la chasse et de la faune sauvage,\nLe préfet de la Manche')
+    expect(sansBlanc.texte).not.toContain('directeur départemental')
   })
 
   it("tronque l'en-tête à 1 500 caractères", () => {
@@ -48,6 +61,22 @@ describe('construireDossier', () => {
     const entete = long.texte.split('=== En-tête (page 1) ===\n')[1].split('\n=== Article')[0]
     expect(entete.replace(/\n?\[…\]\s*$/, '').length).toBeLessThanOrEqual(1500)
     expect(entete).toContain('[…]')
+  })
+
+  it("ne coupe pas un repère de page à la troncature et ne liste que les pages montrées", () => {
+    const t = construireDossier({ ...base, mode: 'complet', pages: [page(1, 'X'.repeat(1495)), page(2, 'Y'.repeat(100)), page(3, 'Article 1 : du 1er juin 2026 au 28 février 2027.')] })
+    expect(t.texte).toContain('X'.repeat(1495) + '\n[…]\n\n=== Article 1 (page 3) ===')
+    expect(t.texte).not.toContain('--- page 2')
+    expect(t.pagesIncluses).toEqual([1, 3])
+  })
+
+  it("envoie en entier, repères compris, un document sans article numéroté (sansArticles)", () => {
+    const avis = construireDossier({ ...base, mode: 'complet', pages: [page(1, 'Avis. ' + 'A'.repeat(2000)), page(2, 'Le sanglier est chassé du 1er juin 2026 au 28 février 2027.')] })
+    expect(avis.sansArticles).toBe(true)
+    expect(avis.texte).toContain('A'.repeat(2000) + '\n--- page 2 ---\nLe sanglier est chassé du 1er juin 2026 au 28 février 2027.')
+    expect(avis.texte).not.toContain('[…]')
+    expect(avis.pagesIncluses).toEqual([1, 2])
+    expect(d.sansArticles).toBe(false)
   })
 
   it('ne garde que les articles datés, plus le dernier (bloc de signature)', () => {
@@ -74,6 +103,7 @@ describe('construireDossier', () => {
     const c = construireDossier({ ...base, mode: 'complet', articlesCibles: ['3'] })
     expect(c.texte).toContain('=== Article 3 (page 1) ===')
     expect(c.texte).not.toContain('=== Article 1 (page 1) ===')
+    expect(c.texte).toContain('=== Article 4 (page 2) ===') // dernier article (signature) toujours montré
   })
 
   it('ajoute en mode difference le bloc des périodes publiées en lignes compactes', () => {
