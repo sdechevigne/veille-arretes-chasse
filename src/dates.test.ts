@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dateIso, datesDe } from './dates.ts'
+import { dateIso, datesDe, compterDatesLarges } from './dates.ts'
 describe('dateIso', () => {
   it('lit les formes françaises courantes', () => {
     expect(dateIso('1er juin 2026', '2026-2027')).toEqual({ iso: '2026-06-01', anneeDeduite: false })
@@ -59,5 +59,17 @@ describe('datesDe', () => {
   })
   it('extrait toutes les dates ISO dans l’ordre', () => {
     expect(datesDe('du 1er juin 2026 au 14 août 2026 puis du 15/08/2026', '2026-2027')).toEqual(['2026-06-01', '2026-08-14', '2026-08-15'])
+  })
+})
+
+describe('compterDatesLarges', () => {
+  it('compte les dates avec ou sans année et les dates numériques', () => {
+    expect(compterDatesLarges('du 1er septembre au 28 février')).toBe(2)
+    expect(compterDatesLarges('du 1er juin 2026 au 15/08/2026')).toBe(2)
+    expect(compterDatesLarges("l'ouverture le 15 août")).toBe(1)
+  })
+  it('vaut 0 sans date (numéro d\'article, nombre isolé)', () => {
+    expect(compterDatesLarges('Article 1er : le sanglier, 3 spécimens par jour')).toBe(0)
+    expect(compterDatesLarges('')).toBe(0)
   })
 })

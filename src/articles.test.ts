@@ -43,4 +43,8 @@ describe('articlesDates', () => {
     const gardes = articlesDates(decouperArticles(PAGES))
     expect(gardes.map(a => a.numero)).toEqual([null, '1', '2'])
   })
+  it('garde un article dont les dates sont sans année ou numériques', () => {
+    const a = decouperArticles([page(1, 'ARRÊTÉ\nArticle 1 : le cerf : du 1er septembre au 28 février.\nArticle 2 : le lièvre du 01/10/2026 au 30/11/2026.\nArticle 3 : sans date.')])
+    expect(articlesDates(a).map(x => x.numero)).toEqual([null, '1', '2'])
+  })
 })

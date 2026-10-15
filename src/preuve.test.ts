@@ -48,6 +48,22 @@ describe('verifierPreuves — périodes', () => {
     expect(r.details).toEqual(["période 1 (sanglier) : date de fermeture 2027-03-31 absente de la citation"])
     expect(r.aRelire).toEqual([])
   })
+  it("signale une date d'ouverture absente avec l'apostrophe correcte", () => {
+    const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1, date_ouverture: '2026-07-01' })]), PAGES, SAISON)
+    expect(r.details).toEqual(["période 1 (sanglier) : date d'ouverture 2026-07-01 absente de la citation"])
+  })
+  it('distingue un nombre altéré (similarité ≥ 0,9) d\'une citation introuvable', () => {
+    const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 29 février 2027', page: 1 })]), PAGES, SAISON)
+    expect(r.details).toHaveLength(1)
+    expect(r.details[0]).toMatch(/^période 1 \(sanglier\) : citation introuvable ou nombre altéré \(similarité 0,9\d\)$/)
+  })
+  it('accepte le pluriel « sikas » pour cerf_sika', () => {
+    const c = 'les cerfs sikas sont chassés du 1er septembre au 28 février'
+    const p = [page(1, c)]
+    const r = verifierPreuves(lecture([periode({ citation: c, page: 1, espece_code: 'cerf', sous_type: 'cerf_sika', date_ouverture: '2026-09-01', date_fermeture: '2027-02-28',
+      preuve: { article: '1', citation: c, page: 1, annee_deduite: true } })]), p, SAISON)
+    expect(r.details).toEqual([])
+  })
   it('accepte une année déduite en comparant jour et mois', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, espece_code: 'cerf', sous_type: 'cerf_sika', date_ouverture: '2026-09-01', date_fermeture: '2027-02-28',
       preuve: { article: '3', citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, annee_deduite: true } })]), PAGES, SAISON)

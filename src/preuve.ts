@@ -5,10 +5,13 @@ import { ESPECES_RECHERCHE } from './lexique.ts'
 import { normaliser, trouverCitation } from './texte.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
 
-const RE_SIKA = /\bsika\b/i
+const RE_SIKA = /\bsikas?\b/i
 
 const motifEspece = (code: string, sousType: string | null): RegExp | undefined =>
   sousType === 'cerf_sika' ? RE_SIKA : ESPECES_RECHERCHE[code]
+
+// Même seuil que trouverCitation : au-dessus, l'échec ne peut venir que d'un nombre différent.
+const SEUIL_NOMBRE_ALTERE = 0.9
 
 const pct = (x: number) => x.toFixed(2).replace('.', ',')
 
@@ -22,7 +25,12 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     const page = pages.find(p => p.n === numPage)
     if (!page) { details.push(`${prefixe}page ${numPage} introuvable`); return false }
     const trouvee = trouverCitation(citation, page.texte)
-    if (!trouvee.ok) { details.push(`${prefixe}citation introuvable (similarité ${pct(trouvee.score)})`); return false }
+    if (!trouvee.ok) {
+      // Score ≥ 0,9 : le texte ressemble, c'est un nombre (jour, année) qui diffère.
+      const nature = trouvee.score >= SEUIL_NOMBRE_ALTERE ? 'citation introuvable ou nombre altéré' : 'citation introuvable'
+      details.push(`${prefixe}${nature} (similarité ${pct(trouvee.score)})`)
+      return false
+    }
     const motif = motifEspece(espece, sousType)
     if (!motif) details.push(`${prefixe}espèce sans motif de recherche`)
     else if (!motif.test(citation)) {
@@ -37,8 +45,8 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     if (!verifierCitation(`période ${i + 1}`, p.espece_code, p.sous_type, citation, page)) return
     const vues = datesDe(normaliser(citation), saison).map(d => (annee_deduite ? d.slice(5) : d))
     const prefixe = `période ${i + 1} (${p.espece_code}) : `
-    for (const [libelle, date] of [['ouverture', p.date_ouverture], ['fermeture', p.date_fermeture]] as const) {
-      if (!vues.includes(annee_deduite ? date.slice(5) : date)) details.push(`${prefixe}date de ${libelle} ${date} absente de la citation`)
+    for (const [libelle, date] of [["d'ouverture", p.date_ouverture], ['de fermeture', p.date_fermeture]] as const) {
+      if (!vues.includes(annee_deduite ? date.slice(5) : date)) details.push(`${prefixe}date ${libelle} ${date} absente de la citation`)
     }
   })
   lecture.suppressions.forEach((s, i) => { verifierCitation(`suppression ${i + 1}`, s.espece_code, s.sous_type, s.citation, s.page) })

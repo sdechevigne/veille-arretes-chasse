@@ -26,3 +26,7 @@ export function dateIso(fragment: string, saison: string): { iso: string; anneeD
 export function datesDe(t: string, saison: string): string[] {
   return (t.match(RE_DATES) ?? []).flatMap(f => { const d = dateIso(f, saison); return d ? [d.iso] : [] })
 }
+
+// Nombre de dates écrites dans le texte, avec ou sans année (« 1er septembre », « 15/08/2026 »), sans les valider.
+// Plus large que `compterDates` (lexique.ts, qui exige une année) : sert à ne pas écarter un article « du 1er septembre au 28 février ».
+export const compterDatesLarges = (t: string): number => (t.match(RE_DATES) ?? []).length

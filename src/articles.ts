@@ -1,5 +1,5 @@
 // Découpage du texte d'un arrêté en articles (un article peut courir sur plusieurs pages). Module pur.
-import { compterDates } from './lexique.ts'
+import { compterDatesLarges } from './dates.ts'
 import type { Article, PageTexte } from './types.ts'
 
 const RE_ARTICLE = /^\s*article\s+(\d+|1er|premier)\b/i
@@ -30,6 +30,6 @@ export function decouperArticles(pages: PageTexte[]): Article[] {
   return articles
 }
 
-// Articles porteurs d'au moins une date ; l'en-tête (numero null) est toujours gardé.
+// Articles porteurs d'au moins une date (année facultative) ; l'en-tête (numero null) est toujours gardé.
 export const articlesDates = (articles: Article[]): Article[] =>
-  articles.filter(a => a.numero === null || compterDates(a.texte) > 0)
+  articles.filter(a => a.numero === null || compterDatesLarges(a.texte) > 0)
