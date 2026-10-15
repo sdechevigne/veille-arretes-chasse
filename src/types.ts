@@ -26,3 +26,19 @@ export interface LectureMecanique {
 
 export interface Telechargement { statut: number; octets: Buffer; urlFinale: string; contentType: 'application/pdf' | null; erreur?: string }
 export interface Telechargeur { telecharger(url: string): Promise<Telechargement> }
+
+/** Une période lue par Claude, avec sa preuve (spec partie 2 §2-§3). */
+export interface PeriodeLue {
+  espece_code: string; sous_type: 'cerf_elaphe' | 'cerf_sika' | null
+  date_ouverture: string; date_fermeture: string; mode_chasse: string
+  restriction_dates: string | null; source_article: string | null
+  preuve: { article: string | null; citation: string; page: number; annee_deduite: boolean }
+}
+export interface ActeLu { numero: string | null; date: string | null; objet: string; signe: boolean; departement_lu: string | null; saison_lue: string | null }
+/** Sortie JSON imposée à Claude par schéma. */
+export interface LectureClaude {
+  acte: ActeLu; periodes: PeriodeLue[]
+  suppressions: { espece_code: string; sous_type: string | null; citation: string; page: number }[]
+  notes: string
+}
+export interface Article { numero: string | null; titre: string; pageDebut: number; texte: string }
