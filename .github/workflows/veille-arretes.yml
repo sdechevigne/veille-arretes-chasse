@@ -1,8 +1,10 @@
 name: Veille arrêtés de chasse
 
-# Étages 1-2 du pipeline (collecte + lecture mécanique), sans Claude.
+# Pipeline complet : collecte, lecture mécanique, lecture Claude (si CLAUDE_CODE_OAUTH_TOKEN est posé), notification Manta.
 # Rythme : quotidien d'avril à août, hebdomadaire (lundi) le reste de l'année — décidé dans le job.
 # Le cron est suspendu tant que le secret VEILLE_PROXY_URL est absent ; le lancement manuel reste possible.
+# Le lundi (planifié), le job « bilan » commite etat/dernier-bilan.json : un commit réel par semaine garde le cron actif
+# (GitHub suspend le planning d'un dépôt public après 60 jours sans commit).
 on:
   schedule:
     - cron: '20 5 * * *'   # 05:20 UTC chaque jour ; le job sort tout de suite hors campagne sauf le lundi
@@ -27,7 +29,10 @@ concurrency:
 jobs:
   veille:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
+    outputs:
+      go: ${{ steps.rythme.outputs.go }}
+      lundi: ${{ steps.rythme.outputs.lundi }}
     defaults:
       run:
         shell: bash   # -eo pipefail : un échec avant `tee` fait échouer l'étape
@@ -37,8 +42,12 @@ jobs:
         env:
           EVENEMENT: ${{ github.event_name }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           mois=$(date -u +%m); jour=$(date -u +%u)
+          # `secrets` n'est pas utilisable dans `if:` : la présence du jeton Claude passe par une sortie d'étape.
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "claude=true" >> "$GITHUB_OUTPUT"; else echo "claude=false" >> "$GITHUB_OUTPUT"; fi
+          if [ "$jour" = "1" ]; then echo "lundi=true" >> "$GITHUB_OUTPUT"; else echo "lundi=false" >> "$GITHUB_OUTPUT"; fi
           if [ "$EVENEMENT" = "schedule" ] && [ -z "$VEILLE_PROXY_URL" ]; then
             echo "go=false" >> "$GITHUB_OUTPUT"
             echo "proxy absent : collecte planifiée suspendue (les sources .gouv.fr seraient toutes en échec)"
@@ -92,6 +101,37 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- lire --limite 100 --budget-min 60 | tee lecture.json
+      - name: Claude Code CLI
+        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
+        run: npm i -g @anthropic-ai/claude-code@2.1.287
+      - name: Lecture Claude
+        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
+        env:
+          DEPARTEMENTS: ${{ github.event.inputs.departements }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+        run: |
+          args=()
+          if [ -n "$DEPARTEMENTS" ]; then
+            [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
+            args+=(--departements "$DEPARTEMENTS")
+          fi
+          # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON (lu par l'étape Notification).
+          npm run -s veille -- lire-claude --limite 40 --budget-min 50 "${args[@]}" | tee lecture-claude.json
+      - name: Notification
+        if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
+        env:
+          MANTA_WEBHOOK_URL: ${{ secrets.MANTA_WEBHOOK_URL }}
+          MANTA_WEBHOOK_SECRET: ${{ secrets.MANTA_WEBHOOK_SECRET }}
+        run: |
+          if [ ! -s lecture-claude.json ]; then echo "pas de lecture-claude.json : aucune notification"; exit 0; fi
+          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.arretQuota ? "oui" : "non")')
+          if [ "$a_notifier" = "oui" ]; then npm run -s veille -- notifier --fichier lecture-claude.json; else echo "rien à signaler"; fi
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
         env:
@@ -110,5 +150,45 @@ jobs:
           path: |
             collecte.json
             lecture.json
+            lecture-claude.json
             sante.json
           retention-days: 30
+
+  # Bilan du lundi (planifié) : notification et fichier d'état commité. Seul job autorisé à écrire dans le dépôt.
+  bilan:
+    needs: veille
+    if: always() && github.event_name == 'schedule' && needs.veille.outputs.go == 'true' && needs.veille.outputs.lundi == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Dépendances
+        run: npm ci
+      - name: Bilan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+          MANTA_WEBHOOK_URL: ${{ secrets.MANTA_WEBHOOK_URL }}
+          MANTA_WEBHOOK_SECRET: ${{ secrets.MANTA_WEBHOOK_SECRET }}
+        run: npm run -s veille -- bilan --notifier --etat etat/dernier-bilan.json
+      - name: Commit du bilan
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add etat/dernier-bilan.json
+          if git diff --cached --quiet -- etat/dernier-bilan.json; then echo "bilan inchangé"; exit 0; fi
+          git commit -m "chore: bilan hebdomadaire" -- etat/dernier-bilan.json
+          git push origin HEAD:main

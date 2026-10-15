@@ -1,7 +1,7 @@
 // Étage 3 : lecture par Claude des documents a_lire (dossier minimal, preuves C1, consolidation) et soumission à la RPC,
 // qui contrôle (C2-C6) et décide. Raccourcis : indéterminé (aucun appel), ponctuel (objet seul), projet → signé identique.
 import type { Archive } from './r2.ts'
-import { PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase } from './db.ts'
+import { PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase, type VersionPubliee } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { Lecteur, RequeteLecture, UsageClaude } from './claude.ts'
 import { decouperArticles } from './articles.ts'
@@ -12,7 +12,7 @@ import { saisonsDepuisTexte } from './saison.ts'
 import { consoliderPeriodes, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
 import { controlerC1, enPanne, panne, type Lu } from './controle-c1.ts'
 import type { PeriodePubliee } from './difference.ts'
-import type { PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
+import type { Article, PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
 
 export interface DepsLectureClaude {
   depot: Depot; archive: Archive; lecteur: Lecteur; outils: OutilsPdf
@@ -22,20 +22,22 @@ export interface DepsLectureClaude {
   fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }>
   now?: () => Date; log?: (l: string) => void
 }
-export interface OptionsLectureClaude { limite: number; echeance?: Date }
+export interface OptionsLectureClaude { limite: number; echeance?: Date; departements?: string[] }
 export interface StatsLectureClaude {
   traites: number; publie: number; publieNote: number; enAttente: number; ignores: number; sansLecture: number; erreurs: number
   arretQuota: boolean; arretPrecoce: boolean; tokens: { input: number; output: number }
   decisions: { documentId: string; departement: string; decision: string }[]
 }
 
-const TOKENS_MAX = 40_000
+/** Taille maximale d'un dossier envoyé à Claude (estimation). */
+export const TOKENS_MAX = 40_000
 
 /** Quota de l'abonnement atteint : on arrête le passage, le document en cours reste intact. */
 class QuotaAtteint extends Error {}
 
 const TYPES_LISIBLES = ['projet', 'annuel', 'modificatif', 'esod', 'ponctuel'] as const
-const estLisible = (t: string | null): t is typeof TYPES_LISIBLES[number] => (TYPES_LISIBLES as readonly (string | null)[]).includes(t)
+export type TypeLisible = typeof TYPES_LISIBLES[number]
+export const estLisible = (t: string | null): t is TypeLisible => (TYPES_LISIBLES as readonly (string | null)[]).includes(t)
 const lirePages = async (archive: Archive, cle: string): Promise<PageTexte[]> => JSON.parse((await archive.lire(cle)).toString('utf8')).pages
 
 export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureClaude): Promise<StatsLectureClaude> {
@@ -43,7 +45,7 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
   const log = (l: string) => { try { deps.log?.(l) } catch { /* journal indisponible */ } }
   const now = deps.now ?? (() => new Date())
   const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, arretQuota: false, arretPrecoce: false, tokens: { input: 0, output: 0 }, decisions: [] }
-  for (const doc of await deps.depot.documentsALire(o.limite, now())) {
+  for (const doc of await deps.depot.documentsALire(o.limite, now(), o.departements)) {
     if (o.echeance && now() >= o.echeance) { stats.arretPrecoce = true; log('échéance atteinte : lecture Claude interrompue'); break }
     let r: ResultatSoumission | null
     try {
@@ -102,32 +104,19 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
     if (enPanne(r2)) throw new Error(panne(r2))
     return { sortie: r2.sortie, modele: r2.modele, relanceOpus: true }
   }
-  const dossier = (typeDossier: Parameters<typeof construireDossier>[0]['type'], mode: ModeLecture, publiees?: PeriodePubliee[]) => {
-    const d = construireDossier({ departement: dept, nom: deps.noms[dept] ?? dept, saison, type: typeDossier, mode, pages, publiees })
-    if (d.estimationTokens > TOKENS_MAX) throw new Error(`document trop long (${d.estimationTokens} tokens estimés)`)
-    if (d.sansArticles) notes.push('document sans article numéroté : texte envoyé entier')
-    return d
-  }
+  const prep = await preparerDossier(deps, { ...doc, type_detecte: type, texte_r2_key: doc.texte_r2_key }, notes, { pages, articles })
+  const d = prep.dossier
+  // Garde de taille : un dossier trop long n'est jamais envoyé (refus explicite, rejouable).
+  if (d.estimationTokens > TOKENS_MAX) throw new Error(`document trop long (${d.estimationTokens} tokens estimés)`)
+  if (d.sansArticles) notes.push('document sans article numéroté : texte envoyé entier')
 
   // Ponctuel (E5) : seul l'objet est lu, pour l'historique ; aucune proposition.
   if (type === 'ponctuel') {
-    const { acte } = (await lire(dossier('ponctuel', 'script_projet_signe').texte)).sortie
+    const { acte } = (await lire(d.texte)).sortie
     await depot.marquerIgnore(doc.id, 'ponctuel sans effet sur les dates', { numero: acte.numero, date: acte.date, objet: acte.objet })
     stats.ignores++; log(`${dept} ignoré : ponctuel (${acte.objet})`); return null
   }
-
-  // Mode : complet, différence (sur la version publiée) ou raccourci projet → signé si les articles sont identiques (E3).
-  const publiee = await depot.versionPubliee(dept, saison)
-  let mode: ModeLecture = type === 'modificatif' || type === 'esod' ? 'difference' : 'complet'
-  if (mode === 'difference' && !publiee.arrete) { mode = 'complet'; notes.push(`${type} : aucune version publiée, lecture complète`) }
-  let periodesProjet: PeriodePayload[] = []
-  if (type === 'annuel') {
-    const projet = await depot.propositionProjet(dept, saison)
-    if (projet && comparerProjetSigne(decouperArticles(await lirePages(deps.archive, projet.texte_r2_key)), articles).identique) {
-      mode = 'script_projet_signe'; periodesProjet = projet.periodes; notes.push('articles identiques au projet : périodes du projet reprises')
-    }
-  }
-  const d = dossier(type, mode, mode === 'difference' ? publiee.periodes : undefined)
+  const { mode, publiee, periodesProjet } = prep
   let lu = await lire(d.texte)
   let c1 = { ok: true, details: [] as string[] }; let doubleLecture = false
   if (mode !== 'script_projet_signe') ({ lu, c1, doubleLecture } = await controlerC1(deps, doc, pages, d, lu, appeler, notes))
@@ -150,4 +139,41 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
     suppression_explicite: conso.suppressionExplicite,
   }
   return depot.soumettre(proposition)
+}
+
+export interface DossierPrepare {
+  mode: ModeLecture
+  /** Version publiée du couple (non consultée pour un ponctuel : vide). */
+  publiee: VersionPubliee
+  periodesProjet: PeriodePayload[]
+  dossier: ReturnType<typeof construireDossier>
+}
+
+/** Mode de lecture et dossier qui serait envoyé à Claude pour un document lisible, sans aucun appel Claude.
+ *  Partagé entre la lecture et la commande d'inspection `dossier` ; les notes de choix de mode sont ajoutées à `notes`. */
+export async function preparerDossier(
+  deps: Pick<DepsLectureClaude, 'depot' | 'archive' | 'noms'>,
+  doc: Pick<DocumentEnBase, 'departement' | 'saison'> & { type_detecte: TypeLisible; texte_r2_key: string },
+  notes: string[],
+  texte?: { pages: PageTexte[]; articles: Article[] },
+): Promise<DossierPrepare> {
+  const dept = doc.departement; const saison = doc.saison; const type = doc.type_detecte
+  const pages = texte?.pages ?? await lirePages(deps.archive, doc.texte_r2_key)
+  const articles = texte?.articles ?? decouperArticles(pages)
+  const construire = (mode: ModeLecture, publiees?: PeriodePubliee[]) =>
+    construireDossier({ departement: dept, nom: deps.noms[dept] ?? dept, saison, type, mode, pages, publiees })
+  if (type === 'ponctuel') return { mode: 'script_projet_signe', publiee: { arrete: null, periodes: [] }, periodesProjet: [], dossier: construire('script_projet_signe') }
+
+  // Mode : complet, différence (sur la version publiée) ou raccourci projet → signé si les articles sont identiques (E3).
+  const publiee = await deps.depot.versionPubliee(dept, saison)
+  let mode: ModeLecture = type === 'modificatif' || type === 'esod' ? 'difference' : 'complet'
+  if (mode === 'difference' && !publiee.arrete) { mode = 'complet'; notes.push(`${type} : aucune version publiée, lecture complète`) }
+  let periodesProjet: PeriodePayload[] = []
+  if (type === 'annuel') {
+    const projet = await deps.depot.propositionProjet(dept, saison)
+    if (projet && comparerProjetSigne(decouperArticles(await lirePages(deps.archive, projet.texte_r2_key)), articles).identique) {
+      mode = 'script_projet_signe'; periodesProjet = projet.periodes; notes.push('articles identiques au projet : périodes du projet reprises')
+    }
+  }
+  return { mode, publiee, periodesProjet, dossier: construire(mode, mode === 'difference' ? publiee.periodes : undefined) }
 }

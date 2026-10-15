@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { lireEnv } from './env.ts'
+import { lireEnv, lireManta } from './env.ts'
 
 const BASE = { SUPABASE_URL: 'https://x.supabase.test', SUPABASE_SERVICE_ROLE_KEY: 'faux', R2_ACCOUNT_ID: 'a', R2_ACCESS_KEY_ID: 'b', R2_SECRET_ACCESS_KEY: 'c', R2_VEILLE_BUCKET: 'd' }
 function poser(extra: Record<string, string> = {}) {
@@ -22,5 +22,10 @@ describe('lireEnv — variables optionnelles Claude / Manta', () => {
     poser({ MANTA_WEBHOOK_SECRET: 's3cret-faux' }); expect(lireEnv().manta).toBeUndefined()
     poser({ MANTA_WEBHOOK_URL: 'https://manta.test/hook', MANTA_WEBHOOK_SECRET: 's3cret-faux' })
     expect(lireEnv().manta).toEqual({ url: 'https://manta.test/hook', secret: 's3cret-faux' })
+  })
+  it('lireManta : lisible sans les variables Supabase / R2 (commande notifier)', () => {
+    for (const k of Object.keys(BASE)) vi.stubEnv(k, '')
+    vi.stubEnv('MANTA_WEBHOOK_URL', 'https://manta.test/hook'); vi.stubEnv('MANTA_WEBHOOK_SECRET', 's3cret-faux')
+    expect(lireManta()).toEqual({ url: 'https://manta.test/hook', secret: 's3cret-faux' })
   })
 })

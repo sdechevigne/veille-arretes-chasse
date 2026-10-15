@@ -72,6 +72,17 @@ describe('creerDepotMemoire — lecture Claude', () => {
     expect((await d.documentsALire(10, NOW)).map(x => x.id)).toEqual(['doc-3', 'doc-1', 'doc-2'])
     expect((await d.documentsALire(2, NOW)).map(x => x.id)).toEqual(['doc-3', 'doc-1'])
   })
+  it('documentsALire : filtre départements appliqué avant la limite', async () => {
+    const d = await depotAvec([
+      { statut: 'a_lire', decouvert_le: '2026-10-01T00:00:00Z' },
+      { statut: 'a_lire', decouvert_le: '2026-10-02T00:00:00Z' },
+      { statut: 'erreur', erreur: 'lecture claude : boum (tentative 1)', decouvert_le: '2026-09-01T00:00:00Z', updated_at: '2026-10-13T00:00:00Z' },
+    ])
+    d.etat.documents[0].departement = '24'; d.etat.documents[1].departement = '50'; d.etat.documents[2].departement = '50'
+    expect((await d.documentsALire(1, NOW, ['50'])).map(x => x.id)).toEqual(['doc-2'])
+    expect((await d.documentsALire(10, NOW, ['50'])).map(x => x.id)).toEqual(['doc-2', 'doc-3'])
+    expect((await d.documentsALire(10, NOW, [])).map(x => x.id)).toEqual(['doc-1', 'doc-2', 'doc-3'])
+  })
   it('tentativesLecture lit le compteur des seules erreurs de lecture Claude', () => {
     expect(tentativesLecture(null)).toBe(0)
     expect(tentativesLecture('pdfinfo cassé (tentative 2)')).toBe(0)

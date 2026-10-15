@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { lireAvecClaude } from './lecture-claude.ts'
+import { lireAvecClaude, preparerDossier } from './lecture-claude.ts'
 import { creerDepotMemoire } from './db.ts'
 import { creerArchiveMemoire, cleArchive } from './r2.ts'
 import type { Lecteur, ReponseLecture, RequeteLecture } from './claude.ts'
@@ -50,7 +50,7 @@ async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
   const outils: OutilsPdf = { async nbPages() { return 1 }, async texteNatif() { return '' }, async ocrPage() { return '' }, async imagePage(_pdf, n) { images.push(n); return Buffer.from(`png${n}`) } }
   const fichierTemp = async (o: Buffer) => { const chemin = `/tmp/fake-${o.toString()}`; temps.push(chemin); return { chemin, liberer: () => { liberes.push(chemin) } } }
   const journal: string[] = []
-  const lancer = (o: { echeance?: Date; limite?: number } = {}) => lireAvecClaude({ depot, archive, lecteur, outils, consigne: CONSIGNE, noms: NOMS, fichierTemp, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
+  const lancer = (o: { echeance?: Date; limite?: number; departements?: string[] } = {}) => lireAvecClaude({ depot, archive, lecteur, outils, consigne: CONSIGNE, noms: NOMS, fichierTemp, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
   const doc = (i: number) => depot.etat.documents[i] as any
   return { depot, archive, lecteur, images, temps, liberes, journal, lancer, doc }
 }
@@ -88,6 +88,24 @@ describe('lireAvecClaude', () => {
     expect(m.lecteur.requetes).toHaveLength(2)
     expect(m.doc(1)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
     expect(m.doc(2).statut_traitement).toBe('a_lire')
+  })
+
+  it('filtre départements : seuls les documents des départements demandés sont lus', async () => {
+    const m = await monter([{}, {}], [ok(sortie())])
+    expect(await m.lancer({ departements: ['24'] })).toMatchObject({ traites: 0 })
+    expect(m.lecteur.requetes).toHaveLength(0)
+    expect(await m.lancer({ departements: ['54'], limite: 1 })).toMatchObject({ traites: 1, publie: 1 })
+  })
+
+  it('preparerDossier (commande dossier) : même mode et même dossier que la lecture, sans appel Claude', async () => {
+    const m = await monter([{ type: 'modificatif', pages: MODIF }], [])
+    m.depot.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete: ARRETE, periodes: [publiee({})] })
+    const notes: string[] = []
+    const p = await preparerDossier({ depot: m.depot, archive: m.archive, noms: NOMS }, m.doc(0), notes)
+    expect(p.mode).toBe('difference')
+    expect(p.dossier.texte).toContain('Le sanglier peut être chassé du 15 juin 2026')
+    expect(p.dossier.estimationTokens).toBeGreaterThan(0)
+    expect(m.lecteur.requetes).toHaveLength(0)
   })
 
   it('schéma raté puis Opus ok : relance_opus et modèle Opus', async () => {

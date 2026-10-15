@@ -23,8 +23,9 @@ export interface Depot {
   documentsParStatut(statut: StatutTraitement, limite: number): Promise<DocumentEnBase[]>
   majLecture(id: string, l: LectureMecanique & { texte_r2_key: string | null }): Promise<void>
   marquerErreur(id: string, message: string): Promise<void>
-  /** Documents à lire par Claude : `a_lire` (ordre de découverte), puis erreurs de lecture Claude rejouables (> 24 h, < 3 tentatives). */
-  documentsALire(limite: number, maintenant?: Date): Promise<DocumentEnBase[]>
+  /** Documents à lire par Claude : `a_lire` (ordre de découverte), puis erreurs de lecture Claude rejouables (> 24 h, < 3 tentatives).
+   *  `departements` (non vide) restreint la file avant la limite. */
+  documentsALire(limite: number, maintenant?: Date, departements?: string[]): Promise<DocumentEnBase[]>
   versionPubliee(departement: string, saison: string): Promise<VersionPubliee>
   /** Dernière proposition `projet` encore valable du couple (ni annulée, ni rejetée) : texte de son document et périodes. */
   propositionProjet(departement: string, saison: string): Promise<{ texte_r2_key: string; periodes: PeriodePayload[] } | null>
@@ -103,13 +104,14 @@ export function creerDepotSupabase(url: string, serviceRoleKey: string): Depot {
     async documentsParStatut(statut, limite) { const { data, error } = await sb.from('arretes_documents').select('*').eq('statut_traitement', statut).order('decouvert_le').limit(limite); lancer('documentsParStatut', error); return data ?? [] },
     async majLecture(id, l) { const { error } = await sb.from('arretes_documents').update({ type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, 2000) ?? null }).eq('id', id); lancer('majLecture', error) },
     async marquerErreur(id, message) { const { error } = await sb.from('arretes_documents').update({ statut_traitement: 'erreur', erreur: message.slice(0, 2000) }).eq('id', id); lancer('marquerErreur', error) },
-    async documentsALire(limite, maintenant = new Date()) {
-      const { data, error } = await sb.from('arretes_documents').select('*').eq('statut_traitement', 'a_lire').order('decouvert_le').order('id').limit(limite); lancer('documentsALire', error)
+    async documentsALire(limite, maintenant = new Date(), departements) {
+      const filtrer = (q: any) => departements?.length ? q.in('departement', departements) : q
+      const { data, error } = await filtrer(sb.from('arretes_documents').select('*').eq('statut_traitement', 'a_lire')).order('decouvert_le').order('id').limit(limite); lancer('documentsALire', error)
       const aLire: DocumentEnBase[] = data ?? []
       if (aLire.length >= limite) return aLire
       // Le compteur de tentatives est dans le texte : filtrage final côté robot (ces lignes restent peu nombreuses).
       const avant = new Date(maintenant.getTime() - DELAI_REJEU_MS).toISOString()
-      const erreurs = await toutesLesPages<DocumentEnBase>('documentsALire/erreurs', (de, a) => sb.from('arretes_documents').select('*').eq('statut_traitement', 'erreur')
+      const erreurs = await toutesLesPages<DocumentEnBase>('documentsALire/erreurs', (de, a) => filtrer(sb.from('arretes_documents').select('*').eq('statut_traitement', 'erreur'))
         .like('erreur', `${PREFIXE_ERREUR_LECTURE}%`).lt('updated_at', avant).order('decouvert_le').order('id').range(de, a))
       return [...aLire, ...erreurs.filter(rejouable)].slice(0, limite)
     },
@@ -151,11 +153,12 @@ export function creerDepotMemoire(): Depot & { etat: EtatMemoire } {
     async documentsParStatut(statut, limite) { return etat.documents.filter(d => d.statut_traitement === statut).slice(0, limite) },
     async majLecture(id, l) { const d = etat.documents.find(d => d.id === id)!; Object.assign(d, { type_detecte: l.type_detecte, numero_acte: l.numero_acte, date_acte: l.date_acte, objet: l.objet, qualite_texte: l.qualite_texte, pages_retenues: l.pages_retenues, texte_r2_key: l.texte_r2_key, statut_traitement: l.statut, erreur: l.motif_ignore?.slice(0, 2000) ?? null }) },
     async marquerErreur(id, message) { const d = etat.documents.find(d => d.id === id)!; d.statut_traitement = 'erreur'; d.erreur = message.slice(0, 2000) },
-    async documentsALire(limite, maintenant = new Date()) {
+    async documentsALire(limite, maintenant = new Date(), departements) {
+      const retenu = (d: DocumentEnBase) => !departements?.length || departements.includes(d.departement)
       const parDecouverte = (a: DocumentEnBase, b: DocumentEnBase) => a.decouvert_le.localeCompare(b.decouvert_le)
       const avant = maintenant.getTime() - DELAI_REJEU_MS
-      const aLire = etat.documents.filter(d => d.statut_traitement === 'a_lire').sort(parDecouverte)
-      const erreurs = etat.documents.filter(d => d.statut_traitement === 'erreur' && rejouable(d) && Date.parse(d.updated_at ?? d.decouvert_le) < avant).sort(parDecouverte)
+      const aLire = etat.documents.filter(d => d.statut_traitement === 'a_lire' && retenu(d)).sort(parDecouverte)
+      const erreurs = etat.documents.filter(d => d.statut_traitement === 'erreur' && retenu(d) && rejouable(d) && Date.parse(d.updated_at ?? d.decouvert_le) < avant).sort(parDecouverte)
       return [...aLire, ...erreurs].slice(0, limite)
     },
     async versionPubliee(departement, saison) {
