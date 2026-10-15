@@ -29,7 +29,7 @@ export interface Telechargeur { telecharger(url: string): Promise<Telechargement
 
 /** Une période lue par Claude, avec sa preuve (spec partie 2 §2-§3). */
 export interface PeriodeLue {
-  espece_code: string; sous_type: 'cerf_elaphe' | 'cerf_sika' | null
+  espece_code: string; sous_type: 'cerf_elaphe' | 'cerf_sika' | 'perdrix_grise' | 'perdrix_rouge' | null
   date_ouverture: string; date_fermeture: string; mode_chasse: string
   restriction_dates: string | null; source_article: string | null
   preuve: { article: string | null; citation: string; page: number; annee_deduite: boolean }

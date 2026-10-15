@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LectureClaude",
+  "description": "Lecture d'un arrêté préfectoral de chasse : acte, périodes prouvées, suppressions, notes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "acte",
+    "periodes",
+    "suppressions",
+    "notes"
+  ],
+  "properties": {
+    "acte": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numero",
+        "date",
+        "objet",
+        "signe",
+        "departement_lu",
+        "saison_lue"
+      ],
+      "properties": {
+        "numero": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "objet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "signe": {
+          "type": "boolean"
+        },
+        "departement_lu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "saison_lue": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^\\d{4}-\\d{4}$"
+        }
+      }
+    },
+    "periodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "espece_code",
+          "sous_type",
+          "date_ouverture",
+          "date_fermeture",
+          "mode_chasse",
+          "restriction_dates",
+          "source_article",
+          "preuve"
+        ],
+        "properties": {
+          "espece_code": {
+            "type": "string",
+            "enum": [
+              "becasse",
+              "belette",
+              "blaireau",
+              "caille",
+              "canard",
+              "cerf",
+              "chamois",
+              "chevreuil",
+              "corbeau",
+              "corneille",
+              "daim",
+              "etourneau",
+              "faisan",
+              "fouine",
+              "geai",
+              "isard",
+              "lapin",
+              "lievre",
+              "martre",
+              "mouflon",
+              "palombe",
+              "perdrix",
+              "pie",
+              "putois",
+              "ragondin",
+              "rat_musque",
+              "renard",
+              "sanglier"
+            ]
+          },
+          "sous_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "cerf_elaphe",
+              "cerf_sika",
+              "perdrix_grise",
+              "perdrix_rouge",
+              null
+            ]
+          },
+          "date_ouverture": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "date_fermeture": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "mode_chasse": {
+            "type": "string",
+            "enum": [
+              "tous_modes",
+              "approche_affut",
+              "battue",
+              "tir",
+              "venerie_sous_terre",
+              "courre"
+            ]
+          },
+          "restriction_dates": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 300
+          },
+          "source_article": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preuve": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "article",
+              "citation",
+              "page",
+              "annee_deduite"
+            ],
+            "properties": {
+              "article": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "citation": {
+                "type": "string",
+                "minLength": 20,
+                "maxLength": 400
+              },
+              "page": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "annee_deduite": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "suppressions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "espece_code",
+          "sous_type",
+          "citation",
+          "page"
+        ],
+        "properties": {
+          "espece_code": {
+            "type": "string",
+            "enum": [
+              "becasse",
+              "belette",
+              "blaireau",
+              "caille",
+              "canard",
+              "cerf",
+              "chamois",
+              "chevreuil",
+              "corbeau",
+              "corneille",
+              "daim",
+              "etourneau",
+              "faisan",
+              "fouine",
+              "geai",
+              "isard",
+              "lapin",
+              "lievre",
+              "martre",
+              "mouflon",
+              "palombe",
+              "perdrix",
+              "pie",
+              "putois",
+              "ragondin",
+              "rat_musque",
+              "renard",
+              "sanglier"
+            ]
+          },
+          "sous_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "cerf_elaphe",
+              "cerf_sika",
+              "perdrix_grise",
+              "perdrix_rouge",
+              null
+            ]
+          },
+          "citation": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 400
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  }
+}
