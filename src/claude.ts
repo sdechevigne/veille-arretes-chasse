@@ -89,8 +89,10 @@ export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude,
         dossier = mkdtempSync(join(dossierTemp, 'veille-claude-'))
         const fichier = join(dossier, 'systeme.md')
         writeFileSync(fichier, req.systeme, { mode: 0o600 })
+        // La CLI refuse le méta-schéma « $schema » (« no schema with key or ref ») : retiré de l'argument ; Ajv valide sur le schéma complet.
+        const { $schema: _meta, ...schemaCli } = req.schema as Record<string, unknown>
         const args = ['-p', '--model', req.modele, '--system-prompt-file', fichier, '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--no-session-persistence',
-          '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(req.schema)]
+          '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(schemaCli)]
         let r: { code: number; stdout: string; stderr: string }
         try { r = await exec(args, messageUtilisateur(req), envFils(envSource, token), delaiMs) } catch (e: any) {
           if (e instanceof DelaiDepasse || e?.code === 'ETIMEDOUT') return echec('timeout', `délai de ${delaiMs} ms dépassé`)

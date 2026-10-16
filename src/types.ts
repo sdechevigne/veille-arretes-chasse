@@ -41,6 +41,8 @@ export interface LectureClaude {
   acte: ActeLu; periodes: PeriodeLue[]
   suppressions: { espece_code: string; sous_type: string | null; citation: string; page: number }[]
   notes: string
+  /** Pages dont le texte est trop abîmé pour lire espèces et dates (seules les pages OCR sont relues en image). */
+  pages_illisibles: number[]
 }
 export interface Article { numero: string | null; titre: string; pageDebut: number; texte: string }
 
@@ -53,7 +55,7 @@ export interface PropositionRobot {
   acte: { numero: string | null; date: string | null; objet: string }
   base_arrete_maj: string | null
   c1: { ok: boolean; details: string[] }
-  lecture: { modele: string; relance_opus: boolean; double_lecture: boolean; usage: { input: number; output: number; cache_creation: number; cache_read: number }; notes: string }
+  lecture: { modele: string; relance_opus: boolean; double_lecture: boolean; lectures_image: number; usage: { input: number; output: number; cache_creation: number; cache_read: number }; notes: string }
   suppression_explicite: boolean
 }
 export type StatutControle = 'ok' | 'note' | 'bloquant' | 'muet'

@@ -70,6 +70,15 @@ describe('textePropositions — erreurs et arrêt précoce', () => {
   })
 })
 
+describe('textePropositions — budget de tokens', () => {
+  it('signale l’arrêt sur budget de tokens et le reste quand il est connu', () => {
+    expect(textePropositions({ enAttente: 0, publie: 2, publieNote: 0, arretQuota: false, arretBudget: true, restantsALire: 5 }))
+      .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 2 publiée(s) [budget de tokens atteint, reste 5 documents]')
+    expect(textePropositions({ enAttente: 0, publie: 2, publieNote: 0, arretQuota: false, arretBudget: true }))
+      .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 2 publiée(s) [budget de tokens atteint]')
+  })
+})
+
 describe('corpsNotificationLecture', () => {
   it('JSON valide : texte des propositions et statistiques', () => {
     const s = { enAttente: 1, publie: 0, publieNote: 0, erreurs: 1, arretQuota: false, arretPrecoce: false }

@@ -47,7 +47,7 @@ Chaque période et chaque suppression porte une preuve :
 - `citation` : **sous-chaîne exacte** du texte fourni, recopiée caractère pour caractère (fautes d'OCR, ponctuation, majuscules comprises), de 40 à 300 caractères conseillés (400 au maximum), sur une seule page : jamais à cheval sur un repère `--- page P ---`. Pour un tableau, recopie la ligne complète telle qu'elle apparaît. Ne recopie jamais un repère `===` / `---`, ni un passage qui enjambe un `[…]`, ni une ligne du bloc des périodes publiées.
   - **Les deux dates** de la période (ouverture et fermeture) y figurent **toujours** : c'est non négociable.
   - Le **mot de l'espèce** y figure aussi : le mot du vocabulaire lui-même (« cerf », « chevreuil », « canard »…, ou « pigeon ramier » pour palombe) ; pour `cerf_sika`, le mot « sika ». Un synonyme seul (biche, faon, brocard, chevrette, gibier d'eau…) ne compte pas : choisis un passage qui porte aussi le mot de l'espèce.
-  - Une seule période mal prouvée bloque tout le document : préfère une citation plus longue (jusqu'à 400 caractères) qui réunit l'espèce et les deux dates. Si c'est impossible, cite quand même le passage qui porte les deux dates et signale l'espèce manquante dans `notes` (la page sera relue en image).
+  - Une seule période mal prouvée bloque tout le document : préfère une citation plus longue (jusqu'à 400 caractères) qui réunit l'espèce et les deux dates. Si c'est impossible, cite quand même le passage qui porte les deux dates et signale l'espèce manquante dans `notes` (la page sera relue).
 - `page` : le numéro du repère le plus proche **au-dessus** de la citation (`=== En-tête (page P) ===`, `=== Article N (page P) ===` ou `--- page P ---`).
 - `article` : le numéro de l'article (« 3 »), `null` pour l'en-tête. `source_article` : « art. 3 », ou `null`.
 - `annee_deduite` : voir les conventions.
@@ -69,6 +69,9 @@ Une citation retouchée, reformulée ou assemblée de deux morceaux sera rejeté
 
 ## `notes`
 Courtes, factuelles : espèces renvoyées (ministériel, ESOD), espèces hors vocabulaire, années ambiguës, citations incomplètes, département ou saison lus différents de la ligne 1, écart entre le type annoncé et le contenu. Chaîne vide s'il n'y a rien à signaler.
+
+## `pages_illisibles`
+Numéros des pages dont le texte est trop abîmé pour y lire espèces et dates (tableau éclaté, colonnes mélangées, caractères illisibles). Liste vide sinon. N'invente jamais de période pour ces pages : elles seront relues en image.
 
 ## Sortie
 Un seul objet JSON conforme au schéma, sans texte autour.

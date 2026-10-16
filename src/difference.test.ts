@@ -14,7 +14,7 @@ const lue = (o: Partial<PeriodeLue>): PeriodeLue => ({
 })
 const lecture = (periodes: PeriodeLue[], suppressions: LectureClaude['suppressions'] = []): LectureClaude => ({
   acte: { numero: null, date: null, objet: '', signe: true, departement_lu: null, saison_lue: null },
-  periodes, suppressions, notes: '',
+  periodes, suppressions, notes: '', pages_illisibles: [],
 })
 
 describe('appliquerDifference', () => {

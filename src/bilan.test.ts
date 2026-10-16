@@ -36,6 +36,6 @@ describe('syntheseBilan', () => {
   })
 
   it('texte de notification lisible', () => {
-    expect(texteBilan(s)).toBe('Bilan hebdomadaire veille arrêtés : 3 document(s) découvert(s), 4 proposition(s) (publie 2, en_attente 1, publie_note 1), 1507 tokens lus / 300 écrits, 3 source(s) en panne')
+    expect(texteBilan(s)).toBe('Bilan hebdomadaire veille arrêtés : 3 document(s) découvert(s), 4 proposition(s) (publie 2, en_attente 1, publie_note 1), 1567 tokens lus (dont 60 en cache) / 300 écrits, 3 source(s) en panne')
   })
 })

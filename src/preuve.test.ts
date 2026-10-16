@@ -16,14 +16,14 @@ const periode = (o: Partial<PeriodeLue> & { citation: string; page: number }): P
   }
 }
 const lecture = (periodes: PeriodeLue[], suppressions: LectureClaude['suppressions'] = []): LectureClaude => ({
-  acte: { numero: null, date: null, objet: '', signe: true, departement_lu: null, saison_lue: null }, periodes, suppressions, notes: '',
+  acte: { numero: null, date: null, objet: '', signe: true, departement_lu: null, saison_lue: null }, periodes, suppressions, notes: '', pages_illisibles: [],
 })
 const SAISON = '2026-2027'
 
 describe('verifierPreuves — périodes', () => {
   it('accepte une citation exacte avec espèce et deux dates', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1 })]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [] })
+    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
   })
   it("refuse une citation sans l'espèce : détail + page à relire", () => {
     const r = verifierPreuves(lecture([periode({ citation: 'du 15 septembre 2026 au 31 janvier 2027 en battue', page: 2, espece_code: 'chevreuil', date_ouverture: '2026-09-15', date_fermeture: '2027-01-31' })]), PAGES, SAISON)
@@ -67,7 +67,7 @@ describe('verifierPreuves — périodes', () => {
   it('accepte une année déduite en comparant jour et mois', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, espece_code: 'cerf', sous_type: 'cerf_sika', date_ouverture: '2026-09-01', date_fermeture: '2027-02-28',
       preuve: { article: '3', citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, annee_deduite: true } })]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [] })
+    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
   })
   it('exige « sika » pour le sous-type cerf_sika', () => {
     const c = 'est chassé du 1er septembre au 28 février. Le lièvre est suspendu.'
@@ -88,10 +88,30 @@ describe('verifierPreuves — périodes', () => {
   })
 })
 
+describe('verifierPreuves — pages en échec', () => {
+  it('rend la page déclarée de chaque élément en échec (page inexistante comprise), triée et sans doublon', () => {
+    const r = verifierPreuves(lecture([
+      periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1, date_fermeture: '2027-03-31' }),
+      periode({ citation: 'du 15 septembre 2026 au 31 janvier 2027 en battue', page: 2, espece_code: 'chevreuil', date_ouverture: '2026-09-15', date_fermeture: '2027-01-31' }),
+      periode({ citation: 'sanglier', page: 9 }),
+      periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1 }),
+    ], [{ espece_code: 'sanglier', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
+    expect(r.pagesEnEchec).toEqual([1, 2, 3, 9])
+    expect(r.aRelire).toEqual([2, 3])
+    expect(r.echecs).toEqual([
+      { page: 1, detail: 'période 1 (sanglier) : date de fermeture 2027-03-31 absente de la citation' },
+      { page: 2, detail: 'période 2 (chevreuil) : espèce absente de la citation' },
+      { page: 9, detail: 'période 3 (sanglier) : page 9 introuvable' },
+      { page: 3, detail: 'suppression 1 (sanglier) : espèce absente de la citation' },
+    ])
+    expect(r.details).toEqual(r.echecs.map(e => e.detail))
+  })
+})
+
 describe('verifierPreuves — suppressions', () => {
   it('accepte une suppression dont la citation porte l\'espèce', () => {
     const r = verifierPreuves(lecture([], [{ espece_code: 'lievre', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [] })
+    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
   })
   it("refuse une suppression sans l'espèce et demande la relecture de la page", () => {
     const r = verifierPreuves(lecture([], [{ espece_code: 'sanglier', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
@@ -109,6 +129,6 @@ describe('verifierPreuves — plage « du 1er au 15 septembre 2026 »', () => {
   it('le jour nu de la citation compte comme date d’ouverture', () => {
     const pages = [page(1, 'Article 4 : le chevreuil est chassé en battue du 1er au 15 septembre 2026 inclus.')]
     const r = verifierPreuves(lecture([periode({ citation: 'le chevreuil est chassé en battue du 1er au 15 septembre 2026', page: 1, espece_code: 'chevreuil', date_ouverture: '2026-09-01', date_fermeture: '2026-09-15' })]), pages, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [] })
+    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
   })
 })

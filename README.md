@@ -9,8 +9,8 @@ Veille automatique des arrêtés préfectoraux de chasse pour Mes Chasses.
 3. **Archive** : l'original est conservé dans un stockage objet (R2) sous une clé stable.
 4. **Lecture mécanique** : extraction du texte (natif ou OCR), détection du type d'acte, de la saison, du numéro et de la date.
 5. **File à lire** : les documents pertinents sont déposés dans une file de relecture ; les autres sont ignorés avec leur motif.
-6. **Lecture Claude** : chaque document de la file est lu par Claude (Claude Code CLI, abonnement) à partir d'un dossier minimal ; la proposition est contrôlée puis décidée en base (publiée, publiée avec note ou en attente de vérification). Arrêt propre au quota de l'abonnement.
-7. **Notification** : un webhook Manta signé (HMAC-SHA256) signale les propositions à vérifier et l'arrêt au quota ; le lundi, un bilan hebdomadaire.
+6. **Lecture Claude** : chaque document de la file est lu par Claude (Claude Code CLI, abonnement) à partir d'un dossier minimal ; la proposition est contrôlée puis décidée en base (publiée, publiée avec note ou en attente de vérification). Contrôle des preuves aiguillé selon la page en échec : texte natif → une relance Opus au plus par document ; page scannée (OCR) → relecture Sonnet sur l'image de la page (une seconde seulement si la première diffère de la lecture texte) ; pages OCR signalées illisibles par Claude relues de même. Arrêt propre au quota de l'abonnement ou au budget de tokens du passage.
+7. **Notification** : un webhook Manta signé (HMAC-SHA256) signale les propositions à vérifier et l'arrêt au quota ou au budget de tokens ; le lundi, un bilan hebdomadaire.
 
 ## Commandes
 
@@ -25,7 +25,7 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 
 - `collecter [--departements 24,50] [--sans-proxy] [--budget-min N]` : collecte des documents.
 - `lire [--limite N] [--budget-min N]` : lecture mécanique (texte, type, saison).
-- `lire-claude [--limite N] [--budget-min N] [--departements 24,50]` : lecture Claude de la file ; statistiques JSON seules sur la sortie standard (journal sur la sortie d'erreur), code 0 même à l'arrêt au quota (`arretQuota`).
+- `lire-claude [--limite N] [--budget-min N] [--budget-tokens N] [--departements 24,50]` : lecture Claude de la file ; statistiques JSON seules sur la sortie standard (journal sur la sortie d'erreur), tokens détaillés (`input`, `output`, `cache_creation`, `cache_read`), code 0 même à l'arrêt au quota (`arretQuota`) ou au budget de tokens (`arretBudget` : tous compteurs confondus, vérifié avant chaque document ; le workflow passe 2 000 000).
 - `dossier --id <uuid>` : affiche le dossier qui serait envoyé à Claude pour un document (mode, estimation de tokens, texte), sans appel Claude.
 - `notifier --fichier lecture-claude.json` : notification Manta des propositions à vérifier (ignorée sans webhook configuré).
 - `sante` : sources en panne et documents des 7 derniers jours.

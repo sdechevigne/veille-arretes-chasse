@@ -33,6 +33,13 @@ const echeanceBudget = (): Date | undefined => {
   if (!Number.isInteger(n) || n <= 0) { console.error('--budget-min doit être un entier strictement positif'); process.exit(2) }
   return new Date(Date.now() + n * 60_000)
 }
+/** `--budget-tokens n` (entier > 0) → plafond de tokens du passage ; absent → aucun plafond. */
+const budgetTokensOpt = (): number | undefined => {
+  const brut = opt('budget-tokens'); if (brut === undefined) return undefined
+  const n = +brut
+  if (!Number.isInteger(n) || n <= 0) { console.error('--budget-tokens doit être un entier strictement positif'); process.exit(2) }
+  return n
+}
 /** `--departements 24,50` → codes en majuscules ; absent → undefined (tous). */
 const departementsOpt = () => opt('departements')?.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 /** `--limite n` (entier > 0), `defaut` si absent. */
@@ -44,7 +51,7 @@ const limiteOpt = (defaut: number) => {
 const log = (l: string) => console.log(l)
 /** Journal sur stderr : commandes dont stdout ne porte que le JSON final (lu par le workflow). */
 const logErr = (l: string) => console.error(l)
-const USAGE = 'usage: veille <collecter|lire|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--limite N] [--budget-min N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
+const USAGE = 'usage: veille <collecter|lire|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--limite N] [--budget-min N] [--budget-tokens N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const clientSupabase = (env: Env) => createClient(env.supabaseUrl, env.serviceRoleKey, { auth: { persistSession: false } }) as any
@@ -88,15 +95,16 @@ async function lireClaude(env: Env) {
   const limite = limiteOpt(40)
   const echeance = echeanceBudget()
   const departements = departementsOpt()
+  const budgetTokens = budgetTokensOpt()
   const consigne = chargerConsigne()
   const sb = clientSupabase(env)
   const stats = await lireAvecClaude({
     depot: creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey), archive: creerArchiveR2(env.r2), lecteur: creerLecteurClaude(env.claude.token),
     outils: outilsPoppler, consigne, noms: await nomsDepartements(sb), fichierTemp, log: logErr,
-  }, { limite, echeance, departements })
-  // Reste de la file (message de quota) : information d'appoint, son échec n'invalide pas le passage.
+  }, { limite, echeance, departements, budgetTokens })
+  // Reste de la file (message de quota ou de budget) : information d'appoint, son échec n'invalide pas le passage.
   let restantsALire: number | undefined
-  if (stats.arretQuota) {
+  if (stats.arretQuota || stats.arretBudget) {
     let q = sb.from('arretes_documents').select('id', { count: 'exact', head: true }).eq('statut_traitement', 'a_lire')
     if (departements?.length) q = q.in('departement', departements)
     const { count, error } = await q

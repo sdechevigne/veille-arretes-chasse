@@ -14,7 +14,7 @@ const sortieValide: LectureClaude = {
     espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'tous_modes', restriction_dates: null, source_article: '2',
     preuve: { article: '2', citation: 'Sanglier : du 1er juin 2026 au 28 février 2027', page: 1, annee_deduite: false },
   }],
-  suppressions: [], notes: '',
+  suppressions: [], notes: '', pages_illisibles: [],
 }
 const USAGE = { input_tokens: 12, cache_creation_input_tokens: 3, cache_read_input_tokens: 5, output_tokens: 7 }
 const ligne = (o: object) => JSON.stringify(o)
@@ -47,7 +47,11 @@ describe('creerLecteurClaude — appel de la CLI', () => {
     expect(args).toContain('--strict-mcp-config')
     expect(args).toContain('--no-session-persistence')
     expect(valeur('--input-format')).toBe('stream-json'); expect(valeur('--output-format')).toBe('stream-json'); expect(args).toContain('--verbose')
-    expect(valeur('--json-schema')).toBe(JSON.stringify(schema))
+    // La CLI refuse « $schema » (« no schema with key or ref ») : retiré de l'argument, gardé pour la validation Ajv.
+    const { $schema: _meta, ...sansMeta } = schema as any
+    expect(JSON.parse(valeur('--json-schema'))).not.toHaveProperty('$schema')
+    expect(valeur('--json-schema')).toBe(JSON.stringify(sansMeta))
+    expect(schema).toHaveProperty('$schema')
     const fichier = valeur('--system-prompt-file')
     expect(appels[0].systemeLu).toBe(systeme); expect(appels[0].mode).toBe(0o600)
     expect(existsSync(fichier)).toBe(false)

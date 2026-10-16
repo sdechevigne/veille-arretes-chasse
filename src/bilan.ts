@@ -34,7 +34,10 @@ export function syntheseBilan(e: EntreeBilan): SyntheseBilan {
 }
 
 export function texteBilan(s: SyntheseBilan): string {
+  // Entrée lue = hors cache + écriture + lecture du cache (la CLI les compte à part).
+  const cache = s.tokens7j.cache_creation + s.tokens7j.cache_read
+  const lus = s.tokens7j.input + cache
   const decisions = Object.entries(s.propositions7j.parDecision).map(([d, n]) => `${d} ${n}`).join(', ')
   return `Bilan hebdomadaire veille arrêtés : ${s.documents7j.total} document(s) découvert(s), ${s.propositions7j.total} proposition(s)${decisions ? ` (${decisions})` : ''}, `
-    + `${s.tokens7j.input} tokens lus / ${s.tokens7j.output} écrits, ${s.sourcesEnPanne} source(s) en panne`
+    + `${lus} tokens lus (dont ${cache} en cache) / ${s.tokens7j.output} écrits, ${s.sourcesEnPanne} source(s) en panne`
 }

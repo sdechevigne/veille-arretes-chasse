@@ -36,6 +36,12 @@ describe('chargerConsigne', () => {
     expect(periode.date_ouverture.pattern).toBe('^\\d{4}-\\d{2}-\\d{2}$')
   })
 
+  it('pages illisibles : liste requise d’entiers ≥ 1, décrite dans la consigne', () => {
+    expect(schema.required).toContain('pages_illisibles')
+    expect(schema.properties.pages_illisibles).toMatchObject({ type: 'array', items: { type: 'integer', minimum: 1 } })
+    expect(systeme).toMatch(/`pages_illisibles`/)
+  })
+
   it('la consigne cite chaque espèce, chaque mode et chaque sous-type', () => {
     for (const mot of [...ESPECES, ...MODES, ...SOUS_TYPES]) expect(systeme).toMatch(new RegExp(`\\b${mot}\\b`))
   })

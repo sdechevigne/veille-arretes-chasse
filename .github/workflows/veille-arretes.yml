@@ -123,7 +123,7 @@ jobs:
           args=()
           [ -n "$DEPARTEMENTS" ] && args+=(--departements "$DEPARTEMENTS")
           # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON (lu par l'étape Notification).
-          npm run -s veille -- lire-claude --limite 40 --budget-min 50 "${args[@]}" | tee lecture-claude.json
+          npm run -s veille -- lire-claude --limite 40 --budget-min 50 --budget-tokens 2000000 "${args[@]}" | tee lecture-claude.json
       - name: Notification
         if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
         continue-on-error: true   # une notification ratée ne doit jamais empêcher « Santé des sources »
@@ -134,7 +134,7 @@ jobs:
           if [ ! -s lecture-claude.json ]; then echo "pas de lecture-claude.json : aucune notification"; exit 0; fi
           # Fichier tronqué / invalide (passage interrompu) : « oui », la commande notifier envoie « résultat illisible ».
           # Sans lecture automatique = documents mis en attente d'un opérateur ; erreurs = documents à relire : à signaler aussi.
-          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.erreurs > 0 || s.arretQuota ? "oui" : "non")' 2>/dev/null || echo oui)
+          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.erreurs > 0 || s.arretQuota || s.arretBudget ? "oui" : "non")' 2>/dev/null || echo oui)
           if [ "$a_notifier" = "oui" ]; then npm run -s veille -- notifier --fichier lecture-claude.json; else echo "rien à signaler"; fi
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'

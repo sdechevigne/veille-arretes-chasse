@@ -1,14 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LectureClaude",
-  "description": "Lecture d'un arrêté préfectoral de chasse : acte, périodes prouvées, suppressions, notes.",
+  "description": "Lecture d'un arrêté préfectoral de chasse : acte, périodes prouvées, suppressions, notes, pages illisibles.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "acte",
     "periodes",
     "suppressions",
-    "notes"
+    "notes",
+    "pages_illisibles"
   ],
   "properties": {
     "acte": {
@@ -259,6 +260,13 @@
     "notes": {
       "type": "string",
       "maxLength": 2000
+    },
+    "pages_illisibles": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
     }
   }
 }

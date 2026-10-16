@@ -22,10 +22,16 @@ export interface DepsLectureClaude {
   fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }>
   now?: () => Date; log?: (l: string) => void
 }
-export interface OptionsLectureClaude { limite: number; echeance?: Date; departements?: string[] }
+export interface OptionsLectureClaude {
+  limite: number; echeance?: Date; departements?: string[]
+  /** Plafond de tokens du passage (entrée, sortie et cache confondus) : atteint → arrêt avant le document suivant. */
+  budgetTokens?: number
+}
 export interface StatsLectureClaude {
   traites: number; publie: number; publieNote: number; enAttente: number; ignores: number; sansLecture: number; erreurs: number
-  arretQuota: boolean; arretPrecoce: boolean; tokens: { input: number; output: number }
+  arretQuota: boolean; arretBudget: boolean; arretPrecoce: boolean
+  /** Entrée hors cache, sortie, écriture et lecture du cache (la CLI compte l'entrée en cache à part). */
+  tokens: UsageClaude
   decisions: { documentId: string; departement: string; decision: string }[]
 }
 
@@ -44,9 +50,12 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
   // Journal défaillant : ne doit jamais faire échouer ni re-marquer un document (la trace est un confort, pas un état).
   const log = (l: string) => { try { deps.log?.(l) } catch { /* journal indisponible */ } }
   const now = deps.now ?? (() => new Date())
-  const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, arretQuota: false, arretPrecoce: false, tokens: { input: 0, output: 0 }, decisions: [] }
+  const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, arretQuota: false, arretBudget: false, arretPrecoce: false, tokens: { input: 0, output: 0, cache_creation: 0, cache_read: 0 }, decisions: [] }
   for (const doc of await deps.depot.documentsALire(o.limite, now(), o.departements)) {
     if (o.echeance && now() >= o.echeance) { stats.arretPrecoce = true; log('échéance atteinte : lecture Claude interrompue'); break }
+    if (o.budgetTokens !== undefined && totalTokens(stats.tokens) >= o.budgetTokens) {
+      stats.arretBudget = true; log(`budget de tokens atteint (${totalTokens(stats.tokens)} / ${o.budgetTokens}) : lecture Claude interrompue`); break
+    }
     let r: ResultatSoumission | null
     try {
       r = await lireDocument(deps, doc, stats, log)
@@ -67,6 +76,9 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
   }
   return stats
 }
+
+/** Tokens consommés, tous compteurs confondus. */
+export const totalTokens = (u: UsageClaude): number => u.input + u.output + u.cache_creation + u.cache_read
 
 /** Motif d'erreur de lecture Claude : le corps est tronqué AVANT le compteur, qui survit donc toujours à la limite de la colonne
  *  (sans lui, le compteur repartirait à 1 et le document serait relu indéfiniment). */
@@ -99,8 +111,7 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
       if (r.erreur === 'quota') throw new QuotaAtteint(r.message)
       return r
     }
-    for (const k of ['input', 'output', 'cache_creation', 'cache_read'] as const) usage[k] += r.usage[k]
-    stats.tokens.input += r.usage.input; stats.tokens.output += r.usage.output
+    for (const k of ['input', 'output', 'cache_creation', 'cache_read'] as const) { usage[k] += r.usage[k]; stats.tokens[k] += r.usage[k] }
     return r
   }
   // Lecture Sonnet ; panne technique (schéma, délai, CLI) → relance unique en Opus, puis erreur.
@@ -125,8 +136,8 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   }
   const { mode, publiee, periodesProjet } = prep
   let lu = await lire(d.texte)
-  let c1 = { ok: true, details: [] as string[] }; let doubleLecture = false
-  if (mode !== 'script_projet_signe') ({ lu, c1, doubleLecture } = await controlerC1(deps, doc, pages, d, lu, appeler, notes))
+  let c1 = { ok: true, details: [] as string[] }; let doubleLecture = false; let lecturesImage = 0
+  if (mode !== 'script_projet_signe') ({ lu, c1, doubleLecture, lecturesImage } = await controlerC1(deps, doc, pages, d, lu, appeler, notes))
 
   // Consolidation, zones publiées perdues (jamais en silence), payload et refus locaux avant la RPC.
   const conso = consoliderPeriodes(mode, lu.sortie, publiee.periodes, periodesProjet)
@@ -145,7 +156,7 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   const proposition: PropositionRobot = {
     document_id: doc.id, departement: dept, saison, mode, type_acte: type, payload, acte: { numero: acte.numero, date: acte.date, objet: acte.objet },
     base_arrete_maj: publiee.arrete?.updated_at ?? null, c1,
-    lecture: { modele: lu.modele, relance_opus: lu.relanceOpus, double_lecture: doubleLecture, usage, notes: [lu.sortie.notes, ...notes].filter(Boolean).join('\n') },
+    lecture: { modele: lu.modele, relance_opus: lu.relanceOpus, double_lecture: doubleLecture, lectures_image: lecturesImage, usage, notes: [lu.sortie.notes, ...notes].filter(Boolean).join('\n') },
     suppression_explicite: conso.suppressionExplicite,
   }
   try {

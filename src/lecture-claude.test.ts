@@ -5,7 +5,7 @@ import { creerArchiveMemoire, cleArchive } from './r2.ts'
 import type { Lecteur, ReponseLecture, RequeteLecture } from './claude.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { PeriodePubliee } from './difference.ts'
-import type { LectureClaude, PeriodeLue, QualiteTexte, TypeDetecte } from './types.ts'
+import type { LectureClaude, PageTexte, PeriodeLue, QualiteTexte, TypeDetecte } from './types.ts'
 
 const NOW = new Date('2026-10-15T12:00:00Z')
 const NOMS = { '54': 'Meurthe-et-Moselle' }
@@ -22,7 +22,7 @@ const preuve = (citation: string, page = 1) => ({ article: '1', citation, page, 
 const P1: PeriodeLue = { espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'tous_modes', restriction_dates: null, source_article: 'Article 1', preuve: preuve('Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027') }
 const P2: PeriodeLue = { espece_code: 'chevreuil', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'approche_affut', restriction_dates: null, source_article: 'Article 2', preuve: preuve("Le chevreuil peut être chassé à l'approche du 1er juin 2026 au 28 février 2027") }
 const ACTE = { numero: '2026/DDT/12', date: '2026-05-12', objet: 'Ouverture et clôture de la chasse 2026-2027', signe: true, departement_lu: 'Meurthe-et-Moselle', saison_lue: '2026-2027' }
-const sortie = (o: Partial<LectureClaude> = {}): LectureClaude => ({ acte: ACTE, periodes: [P1, P2], suppressions: [], notes: '', ...o })
+const sortie = (o: Partial<LectureClaude> = {}): LectureClaude => ({ acte: ACTE, periodes: [P1, P2], suppressions: [], notes: '', pages_illisibles: [], ...o })
 const ok = (s: LectureClaude, modele = 'sonnet'): ReponseLecture => ({ ok: true, sortie: s, usage: { input: 100, output: 50, cache_creation: 10, cache_read: 0 }, modele })
 const echec = (erreur: 'quota' | 'schema' | 'timeout' | 'cli'): ReponseLecture => ({ ok: false, erreur, message: `échec ${erreur}` })
 
@@ -32,7 +32,7 @@ function lecteurScripte(reponses: (ReponseLecture | Error)[]): Lecteur & { reque
   return { requetes, async lire(req) { requetes.push(req); const r = file.shift(); if (!r) throw new Error('plus de réponse prévue'); if (r instanceof Error) throw r; return r } }
 }
 
-interface DocTest { type?: TypeDetecte; pages?: string[]; qualite?: QualiteTexte; statut?: 'a_lire' | 'erreur' | 'propose'; erreur?: string; updated_at?: string }
+interface DocTest { type?: TypeDetecte; pages?: string[]; sources?: PageTexte['source'][]; qualite?: QualiteTexte; statut?: 'a_lire' | 'erreur' | 'propose'; erreur?: string; updated_at?: string }
 async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
   const depot = creerDepotMemoire(); const archive = creerArchiveMemoire(); const lecteur = lecteurScripte(reponses)
   for (const [i, d] of docs.entries()) {
@@ -40,7 +40,7 @@ async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
     const r2_key = cleArchive('2026-2027', '54', sha, 'pdf'); archive.objets.set(r2_key, Buffer.from(`%PDF-${i}`))
     const id = await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: `https://exemple.test/${i}.pdf`, titre: 'AP', sha256: sha, r2_key, taille_octets: 5 })
     const texte_r2_key = cleArchive('2026-2027', '54', sha, 'texte.json')
-    const pages = (d.pages ?? AP).map((texte, j) => ({ n: j + 1, source: 'native', texte, nbDates: 0, nbEspeces: 0 }))
+    const pages = (d.pages ?? AP).map((texte, j) => ({ n: j + 1, source: d.sources?.[j] ?? 'native', texte, nbDates: 0, nbEspeces: 0 }))
     archive.objets.set(texte_r2_key, Buffer.from(JSON.stringify({ sha256: sha, pages })))
     await depot.majLecture(id, { type_detecte: d.type ?? 'annuel', numero_acte: null, date_acte: null, objet: null, qualite_texte: d.qualite ?? 'native', pages_retenues: pages.map(p => p.n), statut: 'a_lire', texte_r2_key })
     Object.assign(depot.etat.documents.find(x => x.id === id)!, { decouvert_le: `2026-10-0${i + 1}T00:00:00Z`, updated_at: d.updated_at ?? `2026-10-0${i + 1}T00:00:00Z` },
@@ -50,7 +50,7 @@ async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
   const outils: OutilsPdf = { async nbPages() { return 1 }, async texteNatif() { return '' }, async ocrPage() { return '' }, async imagePage(_pdf, n) { images.push(n); return Buffer.from(`png${n}`) } }
   const fichierTemp = async (o: Buffer) => { const chemin = `/tmp/fake-${o.toString()}`; temps.push(chemin); return { chemin, liberer: () => { liberes.push(chemin) } } }
   const journal: string[] = []
-  const lancer = (o: { echeance?: Date; limite?: number; departements?: string[] } = {}) => lireAvecClaude({ depot, archive, lecteur, outils, consigne: CONSIGNE, noms: NOMS, fichierTemp, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
+  const lancer = (o: { echeance?: Date; limite?: number; departements?: string[]; budgetTokens?: number } = {}) => lireAvecClaude({ depot, archive, lecteur, outils, consigne: CONSIGNE, noms: NOMS, fichierTemp, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
   const doc = (i: number) => depot.etat.documents[i] as any
   return { depot, archive, lecteur, images, temps, liberes, journal, lancer, doc }
 }
@@ -64,7 +64,8 @@ describe('lireAvecClaude', () => {
   it('annuel complet : une lecture Sonnet, C1 ok, proposition soumise et décision comptée', async () => {
     const m = await monter([{}], [ok(sortie())])
     const stats = await m.lancer()
-    expect(stats).toMatchObject({ traites: 1, publie: 1, enAttente: 0, erreurs: 0, arretQuota: false, arretPrecoce: false, tokens: { input: 100, output: 50 } })
+    expect(stats).toMatchObject({ traites: 1, publie: 1, enAttente: 0, erreurs: 0, arretQuota: false, arretBudget: false, arretPrecoce: false })
+    expect(stats.tokens).toEqual({ input: 100, output: 50, cache_creation: 10, cache_read: 0 })
     expect(stats.decisions).toEqual([{ documentId: 'doc-1', departement: '54', decision: 'publie' }])
     expect(m.lecteur.requetes).toHaveLength(1)
     expect(m.lecteur.requetes[0]).toMatchObject({ modele: 'sonnet', systeme: 'consigne de test', schema: CONSIGNE.schema })
@@ -72,7 +73,7 @@ describe('lireAvecClaude', () => {
     const p = m.depot.etat.propositions[0]
     expect(p).toMatchObject({ document_id: 'doc-1', departement: '54', saison: '2026-2027', mode: 'complet', type_acte: 'annuel', base_arrete_maj: null, suppression_explicite: false,
       acte: { numero: '2026/DDT/12', date: '2026-05-12', objet: ACTE.objet }, c1: { ok: true, details: [] },
-      lecture: { modele: 'sonnet', relance_opus: false, double_lecture: false, usage: { input: 100, output: 50, cache_creation: 10, cache_read: 0 } } })
+      lecture: { modele: 'sonnet', relance_opus: false, double_lecture: false, lectures_image: 0, usage: { input: 100, output: 50, cache_creation: 10, cache_read: 0 } } })
     expect(p.payload).toMatchObject({ departement: '54', saison: '2026-2027', strict: true, arrete: { statut: 'signe', date_signature: '2026-05-12', url_source: 'https://exemple.test/0.pdf' },
       preuve: { code_detecte: '54', dept_detecte: 'Meurthe-et-Moselle', millesime_detecte: '2026-2027', signature_detectee: '2026-05-12', extrait_source: P2.preuve.citation } })
     expect(p.payload.periodes.map(x => x.espece_code)).toEqual(['chevreuil', 'sanglier'])
@@ -126,6 +127,7 @@ describe('lireAvecClaude', () => {
     const faux = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }, P2] })
     const m = await monter([{}], [ok(faux), ok(faux, 'opus')])
     const stats = await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(2); expect(m.images).toEqual([])
     expect(m.lecteur.requetes[1].modele).toBe('opus')
     expect(m.lecteur.requetes[1].texte).toMatch(/Vérification précédente : période \d \(sanglier\) : citation introuvable/)
     const p = m.depot.etat.propositions[0]
@@ -134,43 +136,114 @@ describe('lireAvecClaude', () => {
     expect(stats.enAttente).toBe(1)
   })
 
-  it('citation sans espèce : double lecture en image, sorties égales → double_lecture et C1 résolu', async () => {
+  it('page native, citation sans espèce : relance Opus unique avec le détail, aucune image', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
-    const m = await monter([{}], [ok(s), ok(s), ok(s)])
+    const m = await monter([{}], [ok(s), ok(sortie(), 'opus')])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus'])
+    expect(m.lecteur.requetes[1].texte).toContain('Vérification précédente : période 2 (chevreuil) : espèce absente de la citation')
+    expect(m.lecteur.requetes.every(r => !r.images)).toBe(true); expect(m.images).toEqual([])
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.lecture).toMatchObject({ modele: 'opus', relance_opus: true, double_lecture: false, lectures_image: 0 })
+  })
+
+  it('relance Opus déjà faite (schéma) : jamais une seconde Opus pour C1', async () => {
+    const faux = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }, P2] })
+    const m = await monter([{}], [echec('schema'), ok(faux, 'opus')])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus'])
+    expect(m.depot.etat.propositions[0].c1.ok).toBe(false)
+  })
+
+  it('page OCR, citation sans espèce : pas d’Opus, une lecture sur image identique → confirmé, échec levé', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const m = await monter([{ sources: ['ocr'] }], [ok(s), ok(s)])
     const stats = await m.lancer()
-    expect(m.lecteur.requetes).toHaveLength(3)
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet'])
     expect(m.lecteur.requetes[0].images).toBeUndefined()
-    for (const r of m.lecteur.requetes.slice(1)) { expect(r.modele).toBe('sonnet'); expect(r.images).toEqual([{ page: 1, png: Buffer.from('png1') }]) }
+    expect(m.lecteur.requetes[1].images).toEqual([{ page: 1, png: Buffer.from('png1') }])
+    expect(m.lecteur.requetes[1].texte).toMatch(/pages? 1.*l'image fait foi/s)
     expect(m.images).toEqual([1])
     expect(m.temps).toEqual(['/tmp/fake-%PDF-0']); expect(m.liberes).toEqual(m.temps)
     const p = m.depot.etat.propositions[0]
-    expect(p.lecture).toMatchObject({ double_lecture: true, relance_opus: false, usage: { input: 300, output: 150 } })
+    expect(p.lecture).toMatchObject({ modele: 'sonnet', double_lecture: true, lectures_image: 1, relance_opus: false, usage: { input: 200, output: 100, cache_creation: 20, cache_read: 0 } })
     expect(p.c1).toEqual({ ok: true, details: [] })
-    expect(p.lecture.notes).toContain('levé par la double lecture : période 2 (chevreuil) : espèce absente de la citation')
-    expect(stats.tokens).toEqual({ input: 300, output: 150 })
+    expect(p.lecture.notes).toContain('confirmé sur image : période 2 (chevreuil) : espèce absente de la citation')
+    expect(stats.tokens).toEqual({ input: 200, output: 100, cache_creation: 20, cache_read: 0 })
   })
 
-  it('double lecture divergente → c1.ok = false avec le détail', async () => {
+  it('page OCR, lecture sur image différente puis seconde concordante : la lecture sur image est retenue', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const image = sortie({ periodes: [{ ...P1, date_fermeture: '2027-01-31' }, P2] })
+    const m = await monter([{ sources: ['ocr'] }], [ok(s), ok(image, 'sonnet-image'), ok(image)])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet', 'sonnet'])
+    expect(m.lecteur.requetes.slice(1).every(r => r.images?.length === 1)).toBe(true)
+    const p = m.depot.etat.propositions[0]
+    expect(p.lecture).toMatchObject({ modele: 'sonnet-image', double_lecture: true, lectures_image: 2 })
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.payload.periodes.find(x => x.espece_code === 'sanglier')?.date_fermeture).toBe('2027-01-31')
+    expect(p.lecture.notes).toContain('confirmé sur image : période 1 (sanglier) : date de fermeture 2027-01-31 absente de la citation')
+  })
+
+  it('page OCR, lectures sur image divergentes entre elles → c1.ok = false avec le détail', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
     const autre = sortie({ periodes: [{ ...P1, date_fermeture: '2027-01-31' }, P2] })
-    const m = await monter([{}], [ok(s), ok(s), ok(autre)])
+    const m = await monter([{ sources: ['ocr'] }], [ok(s), ok(autre), ok(s)])
     await m.lancer()
     const p = m.depot.etat.propositions[0]
-    expect(p.lecture.double_lecture).toBe(true)
+    expect(p.lecture).toMatchObject({ double_lecture: true, lectures_image: 2, relance_opus: false })
     expect(p.c1.ok).toBe(false)
-    expect(p.c1.details.some(d => d.startsWith('double lecture divergente'))).toBe(true)
+    expect(p.c1.details.some(d => d.startsWith('lectures divergentes (texte / image) : '))).toBe(true)
+  })
+
+  it('échecs mixtes : Opus pour la page native, puis image seulement pour la page OCR encore en échec', async () => {
+    const pages = [`${ENTETE}\n${ART1}`, `${ART2}\nFait à Nancy, le 12 mai 2026`]
+    const p2Ocr = { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027", 2) }
+    const texte = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }, p2Ocr] })
+    const opus = sortie({ periodes: [P1, p2Ocr] })
+    const m = await monter([{ pages, sources: ['native', 'ocr'] }], [ok(texte), ok(opus, 'opus'), ok(opus)])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus', 'sonnet'])
+    expect(m.images).toEqual([2])
+    expect(m.lecteur.requetes[2].images).toEqual([{ page: 2, png: Buffer.from('png2') }])
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.lecture).toMatchObject({ modele: 'opus', relance_opus: true, double_lecture: true, lectures_image: 1 })
+  })
+
+  it('pages illisibles signalées par Claude : page OCR relue en image même si C1 est bon ; page native ignorée', async () => {
+    const a = await monter([{ sources: ['ocr'] }], [ok(sortie({ pages_illisibles: [1] })), ok(sortie({ pages_illisibles: [1] }))])
+    await a.lancer()
+    expect(a.lecteur.requetes).toHaveLength(2); expect(a.images).toEqual([1])
+    expect(a.depot.etat.propositions[0]).toMatchObject({ c1: { ok: true }, lecture: { double_lecture: true, lectures_image: 1 } })
+    const b = await monter([{}], [ok(sortie({ pages_illisibles: [1] }))])
+    await b.lancer()
+    expect(b.lecteur.requetes).toHaveLength(1); expect(b.images).toEqual([])
+    expect(b.depot.etat.propositions[0]).toMatchObject({ c1: { ok: true }, lecture: { double_lecture: false, lectures_image: 0 } })
+  })
+
+  it('budget de tokens atteint : arrêt avant le document suivant, laissé a_lire', async () => {
+    const m = await monter([{}, {}], [ok(sortie()), ok(sortie())])
+    const stats = await m.lancer({ budgetTokens: 160 })
+    expect(stats).toMatchObject({ arretBudget: true, arretQuota: false, traites: 1, publie: 1 })
+    expect(m.lecteur.requetes).toHaveLength(1)
+    expect(m.doc(1)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
+    const n = await monter([{}, {}], [ok(sortie()), ok(sortie())])
+    expect(await n.lancer({ budgetTokens: 161 })).toMatchObject({ arretBudget: false, traites: 2 })
   })
 
   it('texte OCR douteux : double lecture sur les pages du dossier', async () => {
-    const m = await monter([{ qualite: 'ocr_douteux' }], [ok(sortie()), ok(sortie()), ok(sortie())])
+    const m = await monter([{ qualite: 'ocr_douteux', sources: ['ocr'] }], [ok(sortie()), ok(sortie())])
     await m.lancer()
-    expect(m.lecteur.requetes).toHaveLength(3)
-    expect(m.depot.etat.propositions[0].lecture.double_lecture).toBe(true)
+    expect(m.lecteur.requetes).toHaveLength(2); expect(m.images).toEqual([1])
+    expect(m.depot.etat.propositions[0].lecture).toMatchObject({ double_lecture: true, lectures_image: 1 })
   })
 
   it('plus de 6 pages à relire en image : pas de double lecture, c1.ok = false', async () => {
     const pages = [`${ENTETE}\n${ART1}`, ...Array.from({ length: 6 }, (_, k) => `Article ${k + 2} : Le lièvre peut être chassé du 1er octobre 2026 au 30 novembre 2026.`)]
-    const m = await monter([{ qualite: 'ocr_douteux', pages }], [ok(sortie({ periodes: [P1] }))])
+    const m = await monter([{ qualite: 'ocr_douteux', pages, sources: pages.map(() => 'ocr' as const) }], [ok(sortie({ periodes: [P1] }))])
     await m.lancer()
     expect(m.lecteur.requetes).toHaveLength(1); expect(m.images).toEqual([])
     expect(m.depot.etat.propositions[0].c1).toEqual({ ok: false, details: ['trop de pages à relire en image (7)'] })
@@ -395,11 +468,12 @@ describe('lireAvecClaude', () => {
     expect(m.journal.some(l => /réponse perdue/.test(l) && /déjà enregistrée/.test(l))).toBe(true)
   })
 
-  it('double lecture après une relance Opus : le modèle tracé est celui de la lecture retenue (Sonnet)', async () => {
+  it('lecture sur image après une relance Opus : identique → la lecture Opus est retenue (modèle tracé Opus)', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
-    const m = await monter([{}], [echec('schema'), ok(s, 'opus'), ok(s, 'sonnet'), ok(s, 'sonnet')])
+    const m = await monter([{ sources: ['ocr'] }], [echec('schema'), ok(s, 'opus'), ok(s, 'sonnet')])
     await m.lancer()
-    expect(m.depot.etat.propositions[0].lecture).toMatchObject({ modele: 'sonnet', relance_opus: true, double_lecture: true })
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus', 'sonnet'])
+    expect(m.depot.etat.propositions[0].lecture).toMatchObject({ modele: 'opus', relance_opus: true, double_lecture: true, lectures_image: 1 })
   })
 
   it('département lu : forme longue ramenée au nom officiel ; autre département gardé tel quel et noté', async () => {

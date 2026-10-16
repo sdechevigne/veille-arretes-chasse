@@ -20,12 +20,14 @@ export async function notifierManta(cfg: { url: string; secret: string }, corps:
 
 /** Texte de la notification de fin de lecture Claude (publiées = publiées sans et avec note).
  *  Les documents sans lecture automatique (en attente d'un opérateur) sont ajoutés quand il y en a. */
-export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; sansLecture?: number; erreurs?: number; arretQuota: boolean; arretPrecoce?: boolean; restantsALire?: number }): string {
+export function textePropositions(s: { enAttente: number; publie: number; publieNote: number; sansLecture?: number; erreurs?: number; arretQuota: boolean; arretBudget?: boolean; arretPrecoce?: boolean; restantsALire?: number }): string {
   const sansLecture = s.sansLecture ? `, ${s.sansLecture} document(s) sans lecture automatique à traiter à la main` : ''
   const erreurs = s.erreurs ? `, ${s.erreurs} document(s) en erreur de lecture` : ''
-  const quota = s.arretQuota ? ` [quota Claude atteint${s.restantsALire !== undefined ? `, reste ${s.restantsALire} documents` : ''}]` : ''
+  const reste = s.restantsALire !== undefined ? `, reste ${s.restantsALire} documents` : ''
+  const quota = s.arretQuota ? ` [quota Claude atteint${reste}]` : ''
+  const budget = s.arretBudget ? ` [budget de tokens atteint${reste}]` : ''
   const precoce = s.arretPrecoce ? ' [budget de temps épuisé, lecture interrompue]' : ''
-  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${sansLecture}${erreurs}${quota}${precoce}`
+  return `Veille arrêtés : ${s.enAttente} proposition(s) à vérifier, ${s.publie + s.publieNote} publiée(s)${sansLecture}${erreurs}${quota}${budget}${precoce}`
 }
 
 export const TEXTE_LECTURE_ILLISIBLE = 'Veille arrêtés : lecture Claude : résultat illisible'
