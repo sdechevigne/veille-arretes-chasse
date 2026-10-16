@@ -225,12 +225,42 @@ describe('lireAvecClaude', () => {
     expect(p.lecture).toMatchObject({ relance_opus: true, double_lecture: false, lectures_image: 0 })
   })
 
-  it('page en erreur d’OCR : relue sur image, jamais d’Opus (la relance unique reste disponible)', async () => {
-    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
-    const m = await monter([{ sources: ['erreur'] }], [ok(s), ok(s)])
+  // Production : une page « erreur » n'a aucun texte (pdf.ts) ; la période de la page 2 y est lue par Claude sur image seulement.
+  const PAGES_ERREUR = [`${ENTETE}\n${ART1}`, '']
+  const P2_ERREUR = { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027", 2) }
+  const SOURCES_ERREUR: PageTexte['source'][] = ['native', 'erreur']
+
+  it('page sans texte (erreur d’OCR) : texte ≡ image ne suffit pas, 2ᵉ lecture sur image concordante → échec levé, jamais d’Opus', async () => {
+    const s = sortie({ periodes: [P1, P2_ERREUR] })
+    const m = await monter([{ pages: PAGES_ERREUR, sources: SOURCES_ERREUR }], [ok(s), ok(s), ok(s)])
     await m.lancer()
-    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet']); expect(m.images).toEqual([1])
-    expect(m.depot.etat.propositions[0]).toMatchObject({ c1: { ok: true, details: [] }, lecture: { relance_opus: false, lectures_image: 1 } })
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet', 'sonnet']); expect(m.images).toEqual([2])
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.lecture).toMatchObject({ relance_opus: false, double_lecture: true, lectures_image: 2 })
+    expect(p.lecture.notes).toContain('page 2 sans texte : confirmée par deux lectures sur image : période 2 (chevreuil) : citation introuvable')
+  })
+
+  it('page sans texte : images divergentes → échec bloquant avec le détail, deux lectures comptées', async () => {
+    const s = sortie({ periodes: [P1, P2_ERREUR] })
+    const autre = sortie({ periodes: [P1, { ...P2_ERREUR, date_fermeture: '2027-01-31' }] })
+    const m = await monter([{ pages: PAGES_ERREUR, sources: SOURCES_ERREUR }], [ok(s), ok(s), ok(autre)])
+    await m.lancer()
+    const p = m.depot.etat.propositions[0]
+    expect(p.lecture).toMatchObject({ lectures_image: 2, relance_opus: false })
+    expect(p.c1.ok).toBe(false)
+    expect(p.c1.details).toEqual([expect.stringMatching(/^période 2 \(chevreuil\) : citation introuvable/), expect.stringMatching(/^lectures divergentes \(image \/ image\) : /)])
+  })
+
+  it('page sans texte : texte ≠ image, deux images concordantes → image retenue, échec levé', async () => {
+    const s = sortie({ periodes: [P1, P2_ERREUR] })
+    const image = sortie({ periodes: [P1, { ...P2_ERREUR, date_fermeture: '2027-01-31' }] })
+    const m = await monter([{ pages: PAGES_ERREUR, sources: SOURCES_ERREUR }], [ok(s), ok(image), ok(image)])
+    await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(3)
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.payload.periodes.find(x => x.espece_code === 'chevreuil')?.date_fermeture).toBe('2027-01-31')
   })
 
   it('lecture sur image confirmée : citation abîmée (similarité ≥ 0,5) levée, citation inventée (< 0,5) bloquante', async () => {

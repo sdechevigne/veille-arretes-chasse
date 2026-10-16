@@ -69,21 +69,30 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
   if (enPanne(a)) return echec(`lecture sur image impossible : ${panne(a)}`)
   lecturesImage++
   const texteImage = comparerLectures(lu.sortie, a.sortie)
-  if (texteImage.ecarts.length) {
+  // Page sans texte (OCR en échec, texte vide) : le texte n'a rien pu confirmer, seules deux lectures sur image concordantes valent.
+  const sansTexte = (e: { page: number }) => cibles.includes(e.page) && sourceDe(e.page) === 'erreur'
+  const resteSansTexte = () => verifierPreuves(lu.sortie, pages, doc.saison).echecs.some(e => sansTexte(e) && !levableSurImage(e))
+  let confirmeeParDeuxImages = false
+  if (texteImage.ecarts.length || resteSansTexte()) {
     const b = await appeler(requete)
     if (enPanne(b)) return echec(`lecture sur image impossible : ${panne(b)}`)
     lecturesImage++
     const imageImage = comparerLectures(a.sortie, b.sortie)
-    if (imageImage.ecarts.length) return echec(`lectures divergentes (texte / image) : ${texteImage.ecarts.join(' ; ')} ; seconde lecture sur image : ${imageImage.ecarts.join(' ; ')}`)
+    if (imageImage.ecarts.length) {
+      return echec(texteImage.ecarts.length
+        ? `lectures divergentes (texte / image) : ${texteImage.ecarts.join(' ; ')} ; seconde lecture sur image : ${imageImage.ecarts.join(' ; ')}`
+        : `lectures divergentes (image / image) : ${imageImage.ecarts.join(' ; ')}`)
+    }
+    confirmeeParDeuxImages = true
     notes.push(...imageImage.secondaires.map(d => `lectures sur image, restriction ou article différents : ${d}`))
-    lu = { ...lu, sortie: a.sortie, modele: a.modele }
+    if (texteImage.ecarts.length) lu = { ...lu, sortie: a.sortie, modele: a.modele }
   } else notes.push(...texteImage.secondaires.map(d => `lectures texte / image, restriction ou article différents : ${d}`))
 
   // Lecture confirmée : seuls les échecs d'une page relue en image qu'un OCR abîmé explique sont levés (tracés) ;
-  // une citation inventée (similarité < 0,5) et les échecs des autres pages demeurent.
+  // une citation inventée (similarité < 0,5) et les échecs des autres pages demeurent. Page sans texte : deux images concordantes suffisent.
   const echecs = verifierPreuves(lu.sortie, pages, doc.saison).echecs
-  const leve = (e: (typeof echecs)[number]) => cibles.includes(e.page) && levableSurImage(e)
-  notes.push(...echecs.filter(leve).map(e => `confirmé sur image : ${e.detail}`))
+  const leve = (e: (typeof echecs)[number]) => cibles.includes(e.page) && (levableSurImage(e) || (confirmeeParDeuxImages && sansTexte(e)))
+  notes.push(...echecs.filter(leve).map(e => (levableSurImage(e) ? `confirmé sur image : ${e.detail}` : `page ${e.page} sans texte : confirmée par deux lectures sur image : ${e.detail}`)))
   const details = echecs.filter(e => !leve(e)).map(e => e.detail)
   return resultat(details.length === 0, details)
 }
