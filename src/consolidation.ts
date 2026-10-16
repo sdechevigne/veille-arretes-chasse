@@ -1,4 +1,4 @@
-// Consolidation d'une lecture Claude : périodes retenues, zones publiées perdues, concordance d'une double lecture. Module pur.
+// Consolidation d'une lecture Claude : périodes retenues, zones publiées perdues, comparaison de deux lectures. Module pur.
 import { appliquerDifference, type PeriodePubliee } from './difference.ts'
 import { construirePayload, type EntreePayload, type PayloadCore, type PeriodePayload } from './payload.ts'
 import type { LectureClaude } from './types.ts'
@@ -51,21 +51,38 @@ export function payloadDe(e: Omit<EntreePayload, 'preuveCore'> & { nom: string; 
   return { ...payload, preuve: { ...preuveCore, extrait_source: extrait } }
 }
 
-// Forme comparable d'une période : celle du payload, sans la preuve (citation et page varient d'une lecture à l'autre).
-const formes = (s: LectureClaude): string[] => construirePayload({
+// Clé comparable d'une période (normalisée comme le payload : sous-type canonique, mode nul = tous modes) et attributs
+// secondaires, qui ne changent ni l'espèce ni le mode ni les dates (citation et page, qui varient d'une lecture à l'autre, exclues).
+type Entree = { cle: string; secondaire: string }
+const entrees = (s: LectureClaude): Entree[] => construirePayload({
   departement: '', saison: '', statut: 'en_attente_signature', acte: s.acte, url: '', periodes: s.periodes, notes: '',
   preuveCore: { code_detecte: '', dept_detecte: '', millesime_detecte: '', signature_detectee: '', extrait_source: '' },
-}).periodes.map(({ preuve: _preuve, ...p }) => JSON.stringify(p))
+}).periodes.map(p => ({
+  cle: JSON.stringify([p.espece_code, p.sous_type ?? null, modeDe(p), p.date_ouverture, p.date_fermeture]),
+  secondaire: JSON.stringify([p.restriction_dates ?? null, p.source_article ?? null]),
+}))
+  // Ordre total et stable : clé puis attributs secondaires (comparaison de chaînes, sans dépendre de l'ordre de lecture).
+  .sort((x, y) => (x.cle < y.cle ? -1 : x.cle > y.cle ? 1 : x.secondaire < y.secondaire ? -1 : x.secondaire > y.secondaire ? 1 : 0))
 
-const libelle = (forme: string): string => {
-  const p = JSON.parse(forme) as PeriodePayload
-  return `${p.espece_code} ${modeDe(p)} ${p.date_ouverture}→${p.date_fermeture}`
+const libelle = (cle: string): string => {
+  const [espece, sousType, mode, ouverture, fermeture] = JSON.parse(cle) as (string | null)[]
+  return `${espece}${sousType ? ` ${sousType}` : ''} ${mode} ${ouverture}→${fermeture}`
 }
+const secondaires = (liste: Entree[], cle: string) => liste.filter(e => e.cle === cle).map(e => {
+  const [restriction, article] = JSON.parse(e.secondaire) as (string | null)[]
+  return `restriction ${restriction ?? '-'}, article ${article ?? '-'}`
+}).join(' | ')
 
-/** Écarts entre deux lectures indépendantes (vide = concordantes). */
-export function ecartsDoubleLecture(a: LectureClaude, b: LectureClaude): string[] {
-  const fa = formes(a), fb = formes(b)
-  if (fa.join('\n') === fb.join('\n')) return []
-  if (fa.every(f => fb.includes(f)) && fb.every(f => fa.includes(f))) return [`nombre de périodes différent (${fa.length} / ${fb.length})`]
-  return [...fa.filter(f => !fb.includes(f)).map(f => `${libelle(f)} (lecture 1 seule)`), ...fb.filter(f => !fa.includes(f)).map(f => `${libelle(f)} (lecture 2 seule)`)]
+/** Comparaison de deux lectures indépendantes sur (espèce, sous-type, mode, ouverture, fermeture).
+ *  `ecarts` vide = concordantes ; `secondaires` = périodes concordantes dont la restriction ou l'article diffère (note, pas un écart). */
+export function comparerLectures(a: LectureClaude, b: LectureClaude): { ecarts: string[]; secondaires: string[] } {
+  const ea = entrees(a), eb = entrees(b)
+  const ka = ea.map(e => e.cle), kb = eb.map(e => e.cle)
+  if (ka.join('\n') !== kb.join('\n')) {
+    if (ka.every(k => kb.includes(k)) && kb.every(k => ka.includes(k))) return { ecarts: [`nombre de périodes différent (${ka.length} / ${kb.length})`], secondaires: [] }
+    return { ecarts: [...new Set(ka.filter(k => !kb.includes(k)))].map(k => `${libelle(k)} (lecture 1 seule)`)
+      .concat([...new Set(kb.filter(k => !ka.includes(k)))].map(k => `${libelle(k)} (lecture 2 seule)`)), secondaires: [] }
+  }
+  const diff = [...new Set(ka)].filter(k => secondaires(ea, k) !== secondaires(eb, k))
+  return { ecarts: [], secondaires: diff.map(k => `${libelle(k)} : ${secondaires(ea, k)} (lecture 1) / ${secondaires(eb, k)} (lecture 2)`) }
 }

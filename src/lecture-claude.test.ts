@@ -213,6 +213,63 @@ describe('lireAvecClaude', () => {
     expect(p.lecture).toMatchObject({ modele: 'opus', relance_opus: true, double_lecture: true, lectures_image: 1 })
   })
 
+  it('échec natif persistant après Opus : aucune relecture sur image, C1 reste rouge', async () => {
+    const pages = [`${ENTETE}\n${ART1}`, `${ART2}\nFait à Nancy, le 12 mai 2026`]
+    const p2Ocr = { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027", 2) }
+    const faux = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }, p2Ocr] })
+    const m = await monter([{ pages, sources: ['native', 'ocr'] }], [ok(faux), ok(faux, 'opus')])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus']); expect(m.images).toEqual([])
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1.ok).toBe(false); expect(p.c1.details).toHaveLength(2)
+    expect(p.lecture).toMatchObject({ relance_opus: true, double_lecture: false, lectures_image: 0 })
+  })
+
+  it('page en erreur d’OCR : relue sur image, jamais d’Opus (la relance unique reste disponible)', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const m = await monter([{ sources: ['erreur'] }], [ok(s), ok(s)])
+    await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet']); expect(m.images).toEqual([1])
+    expect(m.depot.etat.propositions[0]).toMatchObject({ c1: { ok: true, details: [] }, lecture: { relance_opus: false, lectures_image: 1 } })
+  })
+
+  it('lecture sur image confirmée : citation abîmée (similarité ≥ 0,5) levée, citation inventée (< 0,5) bloquante', async () => {
+    const abimee = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier peut être chassé du premier juin 2026 au 28 février 2027') }, P2] })
+    const a = await monter([{ sources: ['ocr'] }], [ok(abimee), ok(abimee)])
+    await a.lancer()
+    const pa = a.depot.etat.propositions[0]
+    expect(pa.c1).toEqual({ ok: true, details: [] })
+    expect(pa.lecture.notes).toMatch(/confirmé sur image : période 1 \(sanglier\) : citation introuvable \(similarité 0,8\d\)/)
+    const inventee = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }, P2] })
+    const b = await monter([{ sources: ['ocr'] }], [ok(inventee), ok(inventee)])
+    await b.lancer()
+    expect(b.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'sonnet'])
+    const pb = b.depot.etat.propositions[0]
+    expect(pb.c1.ok).toBe(false); expect(pb.c1.details).toEqual([expect.stringMatching(/^période 1 \(sanglier\) : citation introuvable \(similarité 0,3\d\)$/)])
+    expect(pb.lecture.notes).not.toContain('confirmé sur image')
+  })
+
+  it('lecture sur image en panne : non comptée, C1 rouge avec le détail', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const m = await monter([{ sources: ['ocr'] }], [ok(s), echec('timeout')])
+    await m.lancer()
+    const p = m.depot.etat.propositions[0]
+    expect(p.lecture).toMatchObject({ double_lecture: false, lectures_image: 0 })
+    expect(p.c1.ok).toBe(false); expect(p.c1.details).toContain('lecture sur image impossible : claude timeout : échec timeout')
+  })
+
+  it('texte / image : seule la restriction diffère → concordantes, différence notée', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const image = sortie({ periodes: [{ ...P1, restriction_dates: 'samedi et dimanche' }, s.periodes[1]] })
+    const m = await monter([{ sources: ['ocr'] }], [ok(s), ok(image)])
+    await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(2)
+    const p = m.depot.etat.propositions[0]
+    expect(p).toMatchObject({ c1: { ok: true }, lecture: { lectures_image: 1 } })
+    expect(p.lecture.notes).toContain('lectures texte / image, restriction ou article différents : sanglier tous_modes 2026-06-01→2027-02-28')
+    expect(p.payload.periodes.find(x => x.espece_code === 'sanglier')?.restriction_dates).toBeNull()
+  })
+
   it('pages illisibles signalées par Claude : page OCR relue en image même si C1 est bon ; page native ignorée', async () => {
     const a = await monter([{ sources: ['ocr'] }], [ok(sortie({ pages_illisibles: [1] })), ok(sortie({ pages_illisibles: [1] }))])
     await a.lancer()
@@ -222,6 +279,7 @@ describe('lireAvecClaude', () => {
     await b.lancer()
     expect(b.lecteur.requetes).toHaveLength(1); expect(b.images).toEqual([])
     expect(b.depot.etat.propositions[0]).toMatchObject({ c1: { ok: true }, lecture: { double_lecture: false, lectures_image: 0 } })
+    expect(b.depot.etat.propositions[0].lecture.notes).toContain('page 1 déclarée illisible (texte natif), non relue en image')
   })
 
   it('budget de tokens atteint : arrêt avant le document suivant, laissé a_lire', async () => {

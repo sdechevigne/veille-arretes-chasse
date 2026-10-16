@@ -71,7 +71,7 @@ Une citation retouchée, reformulée ou assemblée de deux morceaux sera rejeté
 Courtes, factuelles : espèces renvoyées (ministériel, ESOD), espèces hors vocabulaire, années ambiguës, citations incomplètes, département ou saison lus différents de la ligne 1, écart entre le type annoncé et le contenu. Chaîne vide s'il n'y a rien à signaler.
 
 ## `pages_illisibles`
-Numéros des pages dont le texte est trop abîmé pour y lire espèces et dates (tableau éclaté, colonnes mélangées, caractères illisibles). Liste vide sinon. N'invente jamais de période pour ces pages : elles seront relues en image.
+Numéros des pages dont le texte est trop abîmé pour y lire espèces et dates (tableau éclaté, colonnes mélangées, caractères illisibles). Liste vide sinon. N'invente jamais de période pour ces pages : elles seront relues.
 
 ## Sortie
 Un seul objet JSON conforme au schéma, sans texte autour.

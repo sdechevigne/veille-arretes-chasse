@@ -1,12 +1,12 @@
 // Contrôle C1 d'une lecture Claude : preuves ancrées dans le texte, aiguillage selon la nature des pages en échec.
 // Page en texte natif : l'échec est une erreur de lecture, qu'une relance Opus unique peut corriger.
-// Page scannée (OCR) : l'échec vient le plus souvent de l'OCR, qu'Opus ne répare pas : la page est relue sur son image.
+// Page scannée (OCR, ou OCR en échec) : l'échec vient le plus souvent de l'OCR, qu'Opus ne répare pas : la page est relue sur son image.
 import type { Archive } from './r2.ts'
 import type { DocumentEnBase } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { ReponseLecture, RequeteLecture } from './claude.ts'
-import { verifierPreuves } from './preuve.ts'
-import { ecartsDoubleLecture } from './consolidation.ts'
+import { levableSurImage, verifierPreuves } from './preuve.ts'
+import { comparerLectures } from './consolidation.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
 
 export type Lu = { sortie: LectureClaude; modele: string; relanceOpus: boolean }
@@ -34,44 +34,56 @@ const consigneImages = (pages: number[]) =>
 
 export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: PageTexte[], dossier: { texte: string; pagesIncluses: number[] },
   lu: Lu, appeler: Appel, notes: string[]): Promise<ResultatC1> {
+  // Page à relire sur image : OCR, ou OCR en échec (`erreur`, texte inexploitable : Opus n'y peut rien).
   // Page absente ou d'origine inconnue : traitée comme du texte natif (relance Opus).
-  const estOcr = (n: number) => pages.find(p => p.n === n)?.source === 'ocr'
+  const sourceDe = (n: number) => pages.find(p => p.n === n)?.source
+  const surImage = (n: number) => sourceDe(n) === 'ocr' || sourceDe(n) === 'erreur'
   let v = verifierPreuves(lu.sortie, pages, doc.saison)
 
   // Phase texte : un échec sur une page native justifie la relance Opus unique (par document), avec le détail des échecs.
-  if (v.pagesEnEchec.some(n => !estOcr(n)) && !lu.relanceOpus) {
+  if (v.pagesEnEchec.some(n => !surImage(n)) && !lu.relanceOpus) {
     const r = await appeler({ modele: 'opus', texte: `${dossier.texte}\n\nVérification précédente : ${v.details.join(' ; ')}` })
     if (enPanne(r)) { lu = { ...lu, relanceOpus: true }; notes.push(`relance Opus après C1 impossible : ${panne(r)}`) }
     else { lu = { sortie: r.sortie, modele: r.modele, relanceOpus: true }; v = verifierPreuves(lu.sortie, pages, doc.saison) }
   }
 
-  // Phase image : pages OCR en échec ou signalées illisibles par Claude, et toutes les pages OCR du dossier si l'OCR est douteux.
-  const candidats = [...v.pagesEnEchec, ...(lu.sortie.pages_illisibles ?? []), ...(doc.qualite_texte === 'ocr_douteux' ? dossier.pagesIncluses : [])]
-  const cibles = [...new Set(candidats.filter(estOcr))].sort((a, b) => a - b)
+  // Pages natives déclarées illisibles : texte exact, rien à relire en image (tracé).
+  for (const n of new Set(lu.sortie.pages_illisibles ?? [])) if (sourceDe(n) === 'native') notes.push(`page ${n} déclarée illisible (texte natif), non relue en image`)
   let lecturesImage = 0
   const resultat = (ok: boolean, details: string[]): ResultatC1 => ({ lu, c1: { ok, details }, doubleLecture: lecturesImage > 0, lecturesImage })
+  // Échec persistant sur une page native : C1 reste rouge quoi qu'il arrive, aucune relecture sur image (dépense inutile).
+  if (v.pagesEnEchec.some(n => !surImage(n))) return resultat(false, v.details)
+
+  // Phase image : pages OCR en échec ou signalées illisibles par Claude, et toutes les pages OCR du dossier si l'OCR est douteux.
+  const candidats = [...v.pagesEnEchec, ...(lu.sortie.pages_illisibles ?? []), ...(doc.qualite_texte === 'ocr_douteux' ? dossier.pagesIncluses : [])]
+  const cibles = [...new Set(candidats.filter(surImage))].sort((a, b) => a - b)
   const echec = (detail: string) => resultat(false, [...v.details, detail])
   if (!cibles.length) return resultat(v.ok, v.details)
   if (cibles.length > PAGES_IMAGE_MAX) return echec(`trop de pages à relire en image (${cibles.length})`)
 
   // Lecture sur image n° 1 : identique à la lecture texte → confirmée ; sinon n° 2, qui doit concorder avec la n° 1.
+  // Comparaison sur espèce, sous-type, mode et dates ; restriction et article différents ne font qu'une note.
   const images = await imagesPages(deps, doc.r2_key, cibles)
   const requete = { modele: 'sonnet' as const, texte: `${dossier.texte}\n\n${consigneImages(cibles)}`, images }
-  const a = await appeler(requete); lecturesImage++
+  const a = await appeler(requete)
   if (enPanne(a)) return echec(`lecture sur image impossible : ${panne(a)}`)
-  const ecartsTexte = ecartsDoubleLecture(lu.sortie, a.sortie)
-  if (ecartsTexte.length) {
-    const b = await appeler(requete); lecturesImage++
+  lecturesImage++
+  const texteImage = comparerLectures(lu.sortie, a.sortie)
+  if (texteImage.ecarts.length) {
+    const b = await appeler(requete)
     if (enPanne(b)) return echec(`lecture sur image impossible : ${panne(b)}`)
-    const ecartsImage = ecartsDoubleLecture(a.sortie, b.sortie)
-    if (ecartsImage.length) return echec(`lectures divergentes (texte / image) : ${ecartsTexte.join(' ; ')} ; seconde lecture sur image : ${ecartsImage.join(' ; ')}`)
+    lecturesImage++
+    const imageImage = comparerLectures(a.sortie, b.sortie)
+    if (imageImage.ecarts.length) return echec(`lectures divergentes (texte / image) : ${texteImage.ecarts.join(' ; ')} ; seconde lecture sur image : ${imageImage.ecarts.join(' ; ')}`)
+    notes.push(...imageImage.secondaires.map(d => `lectures sur image, restriction ou article différents : ${d}`))
     lu = { ...lu, sortie: a.sortie, modele: a.modele }
-  }
+  } else notes.push(...texteImage.secondaires.map(d => `lectures texte / image, restriction ou article différents : ${d}`))
 
-  // Lecture confirmée : seuls les échecs portant sur une page relue en image sont levés (tracés) ; les autres demeurent.
+  // Lecture confirmée : seuls les échecs d'une page relue en image qu'un OCR abîmé explique sont levés (tracés) ;
+  // une citation inventée (similarité < 0,5) et les échecs des autres pages demeurent.
   const echecs = verifierPreuves(lu.sortie, pages, doc.saison).echecs
-  const leves = echecs.filter(e => cibles.includes(e.page))
-  notes.push(...leves.map(e => `confirmé sur image : ${e.detail}`))
-  const details = echecs.filter(e => !cibles.includes(e.page)).map(e => e.detail)
+  const leve = (e: (typeof echecs)[number]) => cibles.includes(e.page) && levableSurImage(e)
+  notes.push(...echecs.filter(leve).map(e => `confirmé sur image : ${e.detail}`))
+  const details = echecs.filter(e => !leve(e)).map(e => e.detail)
   return resultat(details.length === 0, details)
 }

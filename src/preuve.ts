@@ -15,40 +15,44 @@ const SEUIL_NOMBRE_ALTERE = 0.9
 
 const pct = (x: number) => x.toFixed(2).replace('.', ',')
 
-/** Échec C1 d'un élément, avec la page déclarée par sa preuve (aiguillage texte natif / scan). */
-export interface EchecPreuve { page: number; detail: string }
+export type NatureEchec = 'page_introuvable' | 'citation_introuvable' | 'nombre_altere' | 'espece_sans_motif' | 'espece_absente' | 'date_absente'
+/** Échec C1 d'un élément, avec la page déclarée par sa preuve (aiguillage texte natif / scan) ; `score` = similarité
+ *  de la meilleure fenêtre pour une citation non retrouvée. */
+export interface EchecPreuve { page: number; detail: string; nature: NatureEchec; score?: number }
 export interface VerificationPreuves {
   ok: boolean; details: string[]
-  /** Pages où l'espèce manque à une citation retrouvée (OCR en colonnes). */
-  aRelire: number[]
   /** Page déclarée de chaque élément en échec, triée, sans doublon (page inexistante comprise). */
   pagesEnEchec: number[]
   echecs: EchecPreuve[]
 }
 
+/** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
+export const SEUIL_CITATION_ABIMEE = 0.5
+
+/** Échec qu'un texte OCR abîmé peut expliquer, donc levable par une lecture sur image concordante. */
+export const levableSurImage = (e: EchecPreuve): boolean =>
+  e.nature === 'espece_absente' || e.nature === 'nombre_altere' || e.nature === 'date_absente'
+  || (e.nature === 'citation_introuvable' && (e.score ?? 0) >= SEUIL_CITATION_ABIMEE)
+
 export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], saison: string): VerificationPreuves {
   const echecs: EchecPreuve[] = []
-  const aRelire = new Set<number>()
 
   // Vérifie page, citation et espèce ; renvoie vrai si la citation est retrouvée (pour poursuivre sur les dates).
   const verifierCitation = (etiquette: string, espece: string, sousType: string | null, citation: string, numPage: number): boolean => {
     const prefixe = `${etiquette} (${espece}) : `
-    const echouer = (detail: string) => { echecs.push({ page: numPage, detail }) }
+    const echouer = (nature: NatureEchec, detail: string, score?: number) => { echecs.push({ page: numPage, detail, nature, ...(score === undefined ? {} : { score }) }) }
     const page = pages.find(p => p.n === numPage)
-    if (!page) { echouer(`${prefixe}page ${numPage} introuvable`); return false }
+    if (!page) { echouer('page_introuvable', `${prefixe}page ${numPage} introuvable`); return false }
     const trouvee = trouverCitation(citation, page.texte)
     if (!trouvee.ok) {
       // Score ≥ 0,9 : le texte ressemble, c'est un nombre (jour, année) qui diffère.
-      const nature = trouvee.score >= SEUIL_NOMBRE_ALTERE ? 'citation introuvable ou nombre altéré' : 'citation introuvable'
-      echouer(`${prefixe}${nature} (similarité ${pct(trouvee.score)})`)
+      const altere = trouvee.score >= SEUIL_NOMBRE_ALTERE
+      echouer(altere ? 'nombre_altere' : 'citation_introuvable', `${prefixe}${altere ? 'citation introuvable ou nombre altéré' : 'citation introuvable'} (similarité ${pct(trouvee.score)})`, trouvee.score)
       return false
     }
     const motif = motifEspece(espece, sousType)
-    if (!motif) echouer(`${prefixe}espèce sans motif de recherche`)
-    else if (!motif.test(citation)) {
-      echouer(`${prefixe}espèce absente de la citation`)
-      aRelire.add(numPage) // OCR en colonnes : l'espèce est peut-être lisible sur l'image de la page
-    }
+    if (!motif) echouer('espece_sans_motif', `${prefixe}espèce sans motif de recherche`)
+    else if (!motif.test(citation)) echouer('espece_absente', `${prefixe}espèce absente de la citation`)
     return true
   }
 
@@ -58,11 +62,11 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     const vues = datesDe(normaliser(citation), saison).map(d => (annee_deduite ? d.slice(5) : d))
     const prefixe = `période ${i + 1} (${p.espece_code}) : `
     for (const [libelle, date] of [["d'ouverture", p.date_ouverture], ['de fermeture', p.date_fermeture]] as const) {
-      if (!vues.includes(annee_deduite ? date.slice(5) : date)) echecs.push({ page, detail: `${prefixe}date ${libelle} ${date} absente de la citation` })
+      if (!vues.includes(annee_deduite ? date.slice(5) : date)) echecs.push({ page, nature: 'date_absente', detail: `${prefixe}date ${libelle} ${date} absente de la citation` })
     }
   })
   lecture.suppressions.forEach((s, i) => { verifierCitation(`suppression ${i + 1}`, s.espece_code, s.sous_type, s.citation, s.page) })
 
   const tri = (x: Iterable<number>) => [...new Set(x)].sort((a, b) => a - b)
-  return { ok: echecs.length === 0, details: echecs.map(e => e.detail), aRelire: tri(aRelire), pagesEnEchec: tri(echecs.map(e => e.page)), echecs }
+  return { ok: echecs.length === 0, details: echecs.map(e => e.detail), pagesEnEchec: tri(echecs.map(e => e.page)), echecs }
 }

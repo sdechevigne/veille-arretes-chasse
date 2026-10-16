@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { verifierPreuves } from './preuve.ts'
+import { levableSurImage, verifierPreuves } from './preuve.ts'
 import type { LectureClaude, PageTexte, PeriodeLue } from './types.ts'
 
 const page = (n: number, texte: string): PageTexte => ({ n, source: 'native', texte, nbDates: 0, nbEspeces: 0 })
@@ -23,20 +23,19 @@ const SAISON = '2026-2027'
 describe('verifierPreuves — périodes', () => {
   it('accepte une citation exacte avec espèce et deux dates', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1 })]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
+    expect(r).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [] })
   })
-  it("refuse une citation sans l'espèce : détail + page à relire", () => {
+  it("refuse une citation sans l'espèce : détail et page en échec", () => {
     const r = verifierPreuves(lecture([periode({ citation: 'du 15 septembre 2026 au 31 janvier 2027 en battue', page: 2, espece_code: 'chevreuil', date_ouverture: '2026-09-15', date_fermeture: '2027-01-31' })]), PAGES, SAISON)
     expect(r.ok).toBe(false)
     expect(r.details).toEqual(['période 1 (chevreuil) : espèce absente de la citation'])
-    expect(r.aRelire).toEqual([2])
+    expect(r.pagesEnEchec).toEqual([2])
   })
   it('refuse une citation inventée avec sa similarité', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental', page: 1 })]), PAGES, SAISON)
     expect(r.ok).toBe(false)
     expect(r.details).toHaveLength(1)
     expect(r.details[0]).toMatch(/^période 1 \(sanglier\) : citation introuvable \(similarité 0,\d\d\)$/)
-    expect(r.aRelire).toEqual([])
   })
   it("refuse une page inexistante", () => {
     const r = verifierPreuves(lecture([periode({ citation: 'sanglier', page: 9 })]), PAGES, SAISON)
@@ -46,7 +45,6 @@ describe('verifierPreuves — périodes', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1, date_fermeture: '2027-03-31' })]), PAGES, SAISON)
     expect(r.ok).toBe(false)
     expect(r.details).toEqual(["période 1 (sanglier) : date de fermeture 2027-03-31 absente de la citation"])
-    expect(r.aRelire).toEqual([])
   })
   it("signale une date d'ouverture absente avec l'apostrophe correcte", () => {
     const r = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1, date_ouverture: '2026-07-01' })]), PAGES, SAISON)
@@ -67,7 +65,7 @@ describe('verifierPreuves — périodes', () => {
   it('accepte une année déduite en comparant jour et mois', () => {
     const r = verifierPreuves(lecture([periode({ citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, espece_code: 'cerf', sous_type: 'cerf_sika', date_ouverture: '2026-09-01', date_fermeture: '2027-02-28',
       preuve: { article: '3', citation: 'le cerf sika est chassé du 1er septembre au 28 février', page: 3, annee_deduite: true } })]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
+    expect(r).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [] })
   })
   it('exige « sika » pour le sous-type cerf_sika', () => {
     const c = 'est chassé du 1er septembre au 28 février. Le lièvre est suspendu.'
@@ -97,27 +95,40 @@ describe('verifierPreuves — pages en échec', () => {
       periode({ citation: 'Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', page: 1 }),
     ], [{ espece_code: 'sanglier', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
     expect(r.pagesEnEchec).toEqual([1, 2, 3, 9])
-    expect(r.aRelire).toEqual([2, 3])
     expect(r.echecs).toEqual([
-      { page: 1, detail: 'période 1 (sanglier) : date de fermeture 2027-03-31 absente de la citation' },
-      { page: 2, detail: 'période 2 (chevreuil) : espèce absente de la citation' },
-      { page: 9, detail: 'période 3 (sanglier) : page 9 introuvable' },
-      { page: 3, detail: 'suppression 1 (sanglier) : espèce absente de la citation' },
+      { page: 1, nature: 'date_absente', detail: 'période 1 (sanglier) : date de fermeture 2027-03-31 absente de la citation' },
+      { page: 2, nature: 'espece_absente', detail: 'période 2 (chevreuil) : espèce absente de la citation' },
+      { page: 9, nature: 'page_introuvable', detail: 'période 3 (sanglier) : page 9 introuvable' },
+      { page: 3, nature: 'espece_absente', detail: 'suppression 1 (sanglier) : espèce absente de la citation' },
     ])
     expect(r.details).toEqual(r.echecs.map(e => e.detail))
+  })
+})
+
+describe('levableSurImage', () => {
+  it('citation abîmée (similarité ≥ 0,5) levable ; citation inventée (< 0,5) bloquante ; score porté par l’échec', () => {
+    const abimee = verifierPreuves(lecture([periode({ citation: 'Le sanglier peut être chassé du premier juin 2026 au 28 février 2027', page: 1 })]), PAGES, SAISON).echecs[0]
+    const inventee = verifierPreuves(lecture([periode({ citation: 'Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental', page: 1 })]), PAGES, SAISON).echecs[0]
+    expect(abimee).toMatchObject({ nature: 'citation_introuvable' }); expect(abimee.score).toBeGreaterThanOrEqual(0.5)
+    expect(inventee).toMatchObject({ nature: 'citation_introuvable' }); expect(inventee.score).toBeLessThan(0.5)
+    expect(levableSurImage(abimee)).toBe(true); expect(levableSurImage(inventee)).toBe(false)
+  })
+  it('espèce absente, nombre altéré, date absente levables ; page introuvable et espèce sans motif bloquantes', () => {
+    for (const nature of ['espece_absente', 'nombre_altere', 'date_absente'] as const) expect(levableSurImage({ page: 1, detail: '', nature })).toBe(true)
+    for (const nature of ['page_introuvable', 'espece_sans_motif'] as const) expect(levableSurImage({ page: 1, detail: '', nature })).toBe(false)
   })
 })
 
 describe('verifierPreuves — suppressions', () => {
   it('accepte une suppression dont la citation porte l\'espèce', () => {
     const r = verifierPreuves(lecture([], [{ espece_code: 'lievre', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
+    expect(r).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [] })
   })
-  it("refuse une suppression sans l'espèce et demande la relecture de la page", () => {
+  it("refuse une suppression sans l'espèce : détail et page en échec", () => {
     const r = verifierPreuves(lecture([], [{ espece_code: 'sanglier', sous_type: null, citation: 'Le lièvre est suspendu', page: 3 }]), PAGES, SAISON)
     expect(r.ok).toBe(false)
     expect(r.details).toEqual(['suppression 1 (sanglier) : espèce absente de la citation'])
-    expect(r.aRelire).toEqual([3])
+    expect(r.pagesEnEchec).toEqual([3])
   })
   it('refuse une citation de suppression introuvable', () => {
     const r = verifierPreuves(lecture([], [{ espece_code: 'lievre', sous_type: null, citation: 'Le lièvre est totalement protégé dans tout le département jusqu\'en 2030', page: 3 }]), PAGES, SAISON)
@@ -129,6 +140,6 @@ describe('verifierPreuves — plage « du 1er au 15 septembre 2026 »', () => {
   it('le jour nu de la citation compte comme date d’ouverture', () => {
     const pages = [page(1, 'Article 4 : le chevreuil est chassé en battue du 1er au 15 septembre 2026 inclus.')]
     const r = verifierPreuves(lecture([periode({ citation: 'le chevreuil est chassé en battue du 1er au 15 septembre 2026', page: 1, espece_code: 'chevreuil', date_ouverture: '2026-09-01', date_fermeture: '2026-09-15' })]), pages, SAISON)
-    expect(r).toEqual({ ok: true, details: [], aRelire: [], pagesEnEchec: [], echecs: [] })
+    expect(r).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [] })
   })
 })
