@@ -83,6 +83,8 @@ jobs:
         if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
         run: |
           curl -sSL -o h.tgz https://github.com/eventure/hide.client.linux/releases/download/v0.9.14/hide.me-linux-amd64-0.9.14.tar.gz
+          # Intégrité : empreinte épinglée de la v0.9.14 (à recalculer à la main en cas de changement de version).
+          echo "3e9d6842a95a2c91c6e91bdf86389cd74390dda491f206b5b07c402254a56d8f  h.tgz" | sha256sum -c -
           mkdir hide && tar -xzf h.tgz -C hide
       - name: Jeton hide.me
         if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
@@ -106,8 +108,8 @@ jobs:
         run: |
           sudo nohup ./hide.me -c conf.json connect free-fr.hideservers.net > ../hideme.log 2>&1 &
           for i in $(seq 1 30); do [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] && break; sleep 3; done
-          # Pas de sortie française : échec de l'étape avec la fin du journal hide.me (filtré : jamais une ligne évoquant le mot de passe).
-          [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] || { tail -30 ../hideme.log | grep -vi 'password'; exit 1; }
+          # Pas de sortie française : échec de l'étape avec la fin du journal hide.me (filtré : jamais une ligne évoquant mot de passe ou jeton).
+          [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] || { tail -30 ../hideme.log | grep -viE 'password|token'; exit 1; }
           echo "sortie=true" >> "$GITHUB_OUTPUT"
       - name: Collecte
         if: steps.rythme.outputs.go == 'true'
@@ -164,7 +166,15 @@ jobs:
         run: npm run veille -- sante | tee sante.json
       - name: Déconnexion
         if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
-        run: sudo pkill -INT -f 'hide.me .*connect' || true
+        run: |
+          sudo pkill -INT -f 'hide.me .*connect' || true
+          # L'arrêt est asynchrone : on attend la fin du client (15 s au plus) pour que le téléversement des artefacts parte sans le VPN.
+          # `[h]ide.me` : le motif ne se reconnaît pas lui-même dans la ligne de commande de pgrep.
+          for i in $(seq 1 15); do pgrep -f '[h]ide.me .*connect' > /dev/null || break; sleep 1; done
+          pgrep -f '[h]ide.me .*connect' > /dev/null && echo "hide.me toujours actif après 15 s" || echo "hide.me arrêté"
+          echo "pays après déconnexion : $(curl -s -m 8 https://ipinfo.io/country || true)"
+          # Aucune trace des identifiants ni du jeton dans l'espace de travail (artefacts, étapes suivantes).
+          sudo rm -f hide/conf.json hide/accessToken.txt hide/base.json
       - uses: actions/upload-artifact@v4
         if: always() && steps.rythme.outputs.go == 'true'
         with:
