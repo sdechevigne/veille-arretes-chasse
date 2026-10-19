@@ -6,7 +6,7 @@ import { lireEnv, lireManta, type Env } from './env.ts'
 import { creerTelechargeur } from './http.ts'
 import { creerArchiveR2 } from './r2.ts'
 import { creerDepotSupabase, toutesLesPages, type DocumentEnBase } from './db.ts'
-import { collecter } from './collecte.ts'
+import { collecter, choisirAcces } from './collecte.ts'
 import { lireMecaniquement } from './lecture.ts'
 import { produireImagesPages } from './images-pages.ts'
 import { lireAvecClaude, preparerDossier, estLisible, TOKENS_MAX } from './lecture-claude.ts'
@@ -52,7 +52,7 @@ const limiteOpt = (defaut: number) => {
 const log = (l: string) => console.log(l)
 /** Journal sur stderr : commandes dont stdout ne porte que le JSON final (lu par le workflow). */
 const logErr = (l: string) => console.error(l)
-const USAGE = 'usage: veille <collecter|lire|images-pages|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--limite N] [--budget-min N] [--budget-tokens N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
+const USAGE = 'usage: veille <collecter|lire|images-pages|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--sortie-france] [--limite N] [--budget-min N] [--budget-tokens N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const clientSupabase = (env: Env) => createClient(env.supabaseUrl, env.serviceRoleKey, { auth: { persistSession: false } }) as any
@@ -170,13 +170,13 @@ async function main() {
   if (commande === 'collecter') {
     const depot = creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey)
     const archive = creerArchiveR2(env.r2)
-    // Sans proxy (option explicite ou secret absent), les sites .gouv.fr (géoblocage) échoueraient tous : on les écarte au lieu de les compter en panne.
-    const sansProxy = flag('sans-proxy') || !env.proxy
-    const http = creerTelechargeur({ proxy: sansProxy ? undefined : env.proxy })
+    // `--sortie-france` : posé par le workflow une fois la sortie hide.me vérifiée en France ; sans lui ni proxy, les .gouv.fr sont écartées (cf. choisirAcces).
+    const acces = choisirAcces({ sansProxy: flag('sans-proxy'), sortieFrance: flag('sortie-france'), proxy: env.proxy })
+    const http = creerTelechargeur({ proxy: acces.proxy })
     const departements = departementsOpt()
     const echeance = echeanceBudget()
-    const stats = await collecter({ depot, archive, http, log }, { departements, echeance, exclureHotes: sansProxy ? h => h.endsWith('.gouv.fr') : undefined })
-    if (sansProxy) console.error(`${stats.sourcesEcartees} sources .gouv.fr écartées (pas de proxy)`)
+    const stats = await collecter({ depot, archive, http, log }, { departements, echeance, exclureHotes: acces.ecarterGouv ? h => h.endsWith('.gouv.fr') : undefined })
+    if (acces.ecarterGouv) console.error(`${stats.sourcesEcartees} sources .gouv.fr écartées (pas de proxy)`)
     if (departements?.length && stats.sourcesVisitees === 0) console.error(`Avertissement : aucune source active ne correspond aux départements demandés (${departements.join(', ')})`)
     console.log(JSON.stringify(stats, null, 2)); return
   }

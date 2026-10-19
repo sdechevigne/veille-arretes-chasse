@@ -16,6 +16,18 @@ export interface OptionsCollecte {
 }
 export interface StatsCollecte { sourcesVisitees: number; sourcesEnEchec: number; pagesLues: number; pdfVus: number; pdfNouveaux: number; pdfIgnores: number; sourcesEcartees: number; arretPrecoce: boolean; erreurs: string[] }
 
+/**
+ * Mode d'accès de la collecte (les `.gouv.fr` refusent les adresses hors de France).
+ * - `sortieFrance` (le workflow a vérifié que la sortie est française) : trafic direct, aucune source écartée, proxy ignoré — sauf `--sans-proxy`
+ *   explicite, qui reste prioritaire (essai « fédérations seulement ») ;
+ * - sinon, sans proxy (option explicite ou secret absent) : les `.gouv.fr` échoueraient tous, on les écarte au lieu de les compter en panne.
+ */
+export function choisirAcces(o: { sansProxy: boolean; sortieFrance: boolean; proxy?: string }): { proxy: string | undefined; ecarterGouv: boolean } {
+  if (o.sansProxy) return { proxy: undefined, ecarterGouv: true }
+  if (o.sortieFrance) return { proxy: undefined, ecarterGouv: false }
+  return { proxy: o.proxy, ecarterGouv: !o.proxy }
+}
+
 const estPdf = (t: Telechargement) => t.contentType === 'application/pdf' || t.octets.subarray(0, 5).toString() === '%PDF-'
 interface Parcours { visitees: Set<string>; pdfs: number; pagesSuivies: number; plafondSignale: boolean }
 const pageEnEchec = (t: Telechargement) => t.statut !== 200 || !!t.erreur

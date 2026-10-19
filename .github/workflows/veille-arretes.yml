@@ -1,9 +1,12 @@
 name: Veille arrêtés de chasse
 
-# Pipeline complet : collecte, lecture mécanique, lecture Claude (si CLAUDE_CODE_OAUTH_TOKEN est posé), notification Manta.
+# Collecte et lecture mécanique + images des pages scannées, ici ; la lecture Claude tourne la nuit sur la machine Manta
+# (scripts/lecture-nocturne.sh, opencode local), pas sur GitHub.
 # Rythme : quotidien d'avril à août, hebdomadaire (lundi) le reste de l'année — décidé dans le job.
-# Le cron est suspendu tant que le secret VEILLE_PROXY_URL est absent ; le lancement manuel reste possible (option sans_proxy :
-# sources .gouv.fr écartées). La sortie par une adresse française via hide.me n'est PAS encore dans ce workflow (tâche à venir).
+# Les sites .gouv.fr n'acceptent que des adresses françaises : le job ouvre une connexion hide.me (serveur gratuit free-fr) avant la collecte
+# et la referme à la fin (recette : meschasses/docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md §2).
+# Le cron est suspendu tant que le secret HIDEME_USER est absent ; le lancement manuel reste possible (option sans_proxy :
+# pas de connexion hide.me, sources .gouv.fr écartées). VEILLE_PROXY_URL reste lu en secours (lancement manuel sans hide.me).
 # Le lundi (planifié), le job « bilan » commite etat/dernier-bilan.json : un commit réel par semaine garde le cron actif
 # (GitHub suspend le planning d'un dépôt public après 60 jours sans commit).
 on:
@@ -16,7 +19,7 @@ on:
         required: false
         default: ''
       sans_proxy:
-        description: 'Ignorer le proxy et écarter les sources .gouv.fr (fédérations seulement)'
+        description: 'Pas de connexion hide.me ni de proxy : sources .gouv.fr écartées (fédérations seulement)'
         type: boolean
         default: false
 
@@ -43,21 +46,20 @@ jobs:
         env:
           EVENEMENT: ${{ github.event_name }}
           DEPARTEMENTS: ${{ github.event.inputs.departements }}
-          VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          HIDEME_USER: ${{ secrets.HIDEME_USER }}
         run: |
           mois=$(date -u +%m); jour=$(date -u +%u)
-          # Codes de départements : validés une seule fois ici, relus par « Collecte » et « Lecture Claude » (sortie `departements`).
+          # Codes de départements : validés une seule fois ici, relus par « Collecte » (sortie `departements`).
           if [ -n "$DEPARTEMENTS" ]; then
             [[ "$DEPARTEMENTS" =~ ^[0-9A-Ba-b]{2}(,[0-9A-Ba-b]{2})*$ ]] || { echo "departements invalides : $DEPARTEMENTS" >&2; exit 2; }
           fi
           echo "departements=$DEPARTEMENTS" >> "$GITHUB_OUTPUT"
-          # `secrets` n'est pas utilisable dans `if:` : la présence du jeton Claude passe par une sortie d'étape.
-          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then echo "claude=true" >> "$GITHUB_OUTPUT"; else echo "claude=false" >> "$GITHUB_OUTPUT"; fi
+          # `secrets` n'est pas utilisable dans `if:` : la présence du compte hide.me passe par une sortie d'étape.
+          if [ -n "$HIDEME_USER" ]; then echo "france=true" >> "$GITHUB_OUTPUT"; else echo "france=false" >> "$GITHUB_OUTPUT"; fi
           if [ "$jour" = "1" ]; then echo "lundi=true" >> "$GITHUB_OUTPUT"; else echo "lundi=false" >> "$GITHUB_OUTPUT"; fi
-          if [ "$EVENEMENT" = "schedule" ] && [ -z "$VEILLE_PROXY_URL" ]; then
+          if [ "$EVENEMENT" = "schedule" ] && [ -z "$HIDEME_USER" ]; then
             echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "proxy absent : collecte planifiée suspendue (les sources .gouv.fr seraient toutes en échec)"
+            echo "compte hide.me absent : collecte planifiée suspendue (les sources .gouv.fr seraient toutes en échec)"
           elif [ "$EVENEMENT" = "workflow_dispatch" ] || { [ "$mois" -ge 4 ] && [ "$mois" -le 8 ]; } || [ "$jour" = "1" ]; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
@@ -77,11 +79,42 @@ jobs:
       - name: Dépendances
         if: steps.rythme.outputs.go == 'true'
         run: npm ci
+      - name: Client hide.me
+        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        run: |
+          curl -sSL -o h.tgz https://github.com/eventure/hide.client.linux/releases/download/v0.9.14/hide.me-linux-amd64-0.9.14.tar.gz
+          mkdir hide && tar -xzf h.tgz -C hide
+      - name: Jeton hide.me
+        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        working-directory: hide
+        env:
+          HU: ${{ secrets.HIDEME_USER }}
+          HP: ${{ secrets.HIDEME_PASSWORD }}
+        run: |
+          # Identifiants par fichier de configuration (jamais `-P` en argument : visible dans la liste des processus) ; lus par jq dans l'environnement, pas en argument.
+          umask 077
+          ./hide.me jsonconf > base.json 2>/dev/null || true
+          jq '.Rest.Username=env.HU | .Rest.Password=env.HP' base.json > conf.json
+          # Le client exige un terminal même quand les identifiants sont dans la configuration : pseudo-terminal par `script`.
+          # `timeout 90` : sans lui, la demande de jeton peut pendre sans fin.
+          sudo timeout 90 script -qec "./hide.me -c conf.json token free-fr.hideservers.net" /dev/null < /dev/null
+          sudo test -s accessToken.txt
+      - name: Connexion France
+        id: vpn
+        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        working-directory: hide
+        run: |
+          sudo nohup ./hide.me -c conf.json connect free-fr.hideservers.net > ../hideme.log 2>&1 &
+          for i in $(seq 1 30); do [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] && break; sleep 3; done
+          # Pas de sortie française : échec de l'étape avec la fin du journal hide.me (filtré : jamais une ligne évoquant le mot de passe).
+          [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] || { tail -30 ../hideme.log | grep -vi 'password'; exit 1; }
+          echo "sortie=true" >> "$GITHUB_OUTPUT"
       - name: Collecte
         if: steps.rythme.outputs.go == 'true'
         env:
           DEPARTEMENTS: ${{ steps.rythme.outputs.departements }}
           SANS_PROXY: ${{ github.event.inputs.sans_proxy }}
+          SORTIE_FRANCE: ${{ steps.vpn.outputs.sortie }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -93,6 +126,8 @@ jobs:
           args=()
           [ -n "$DEPARTEMENTS" ] && args+=(--departements "$DEPARTEMENTS")
           [ "$SANS_PROXY" = "true" ] && args+=(--sans-proxy)
+          # Posé seulement si « Connexion France » a vérifié une sortie FR : les sources .gouv.fr ne sont alors plus écartées.
+          [ "$SORTIE_FRANCE" = "true" ] && args+=(--sortie-france)
           npm run veille -- collecter --budget-min 45 "${args[@]}" | tee collecte.json
       - name: Lecture mécanique
         if: steps.rythme.outputs.go == 'true'
@@ -105,37 +140,17 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- lire --limite 100 --budget-min 60 | tee lecture.json
-      - name: Claude Code CLI
-        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
-        run: npm i -g @anthropic-ai/claude-code@2.1.287
-      - name: Lecture Claude
-        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
+      - name: Images des pages
+        if: steps.rythme.outputs.go == 'true'
         env:
-          DEPARTEMENTS: ${{ steps.rythme.outputs.departements }}
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
-        run: |
-          args=()
-          [ -n "$DEPARTEMENTS" ] && args+=(--departements "$DEPARTEMENTS")
-          # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON (lu par l'étape Notification).
-          npm run -s veille -- lire-claude --limite 40 --budget-min 50 --budget-tokens 2000000 "${args[@]}" | tee lecture-claude.json
-      - name: Notification
-        if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.claude == 'true'
-        continue-on-error: true   # une notification ratée ne doit jamais empêcher « Santé des sources »
-        env:
-          MANTA_WEBHOOK_URL: ${{ secrets.MANTA_WEBHOOK_URL }}
-          MANTA_WEBHOOK_SECRET: ${{ secrets.MANTA_WEBHOOK_SECRET }}
-        run: |
-          if [ ! -s lecture-claude.json ]; then echo "pas de lecture-claude.json : aucune notification"; exit 0; fi
-          # Fichier tronqué / invalide (passage interrompu) : « oui », la commande notifier envoie « résultat illisible ».
-          # Sans lecture automatique = documents mis en attente d'un opérateur ; erreurs = documents à relire : à signaler aussi.
-          a_notifier=$(node -e 'const s = JSON.parse(require("fs").readFileSync("lecture-claude.json", "utf8")); console.log(s.enAttente > 0 || s.sansLecture > 0 || s.erreurs > 0 || s.arretQuota || s.arretBudget ? "oui" : "non")' 2>/dev/null || echo oui)
-          if [ "$a_notifier" = "oui" ]; then npm run -s veille -- notifier --fichier lecture-claude.json; else echo "rien à signaler"; fi
+        # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON.
+        run: npm run -s veille -- images-pages --limite 200 --budget-min 20 | tee images-pages.json
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
         env:
@@ -147,6 +162,9 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- sante | tee sante.json
+      - name: Déconnexion
+        if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        run: sudo pkill -INT -f 'hide.me .*connect' || true
       - uses: actions/upload-artifact@v4
         if: always() && steps.rythme.outputs.go == 'true'
         with:
@@ -154,14 +172,14 @@ jobs:
           path: |
             collecte.json
             lecture.json
-            lecture-claude.json
+            images-pages.json
             sante.json
           retention-days: 30
 
   # Bilan du lundi (planifié) : notification et fichier d'état commité. Seul job autorisé à écrire dans le dépôt.
   bilan:
     needs: veille
-    # Ne lit que Supabase : indépendant de `go` (le cron reste « suspendu » côté collecte tant que le proxy est absent,
+    # Ne lit que Supabase : indépendant de `go` (le cron reste « suspendu » côté collecte tant que le compte hide.me est absent,
     # mais le commit hebdomadaire doit quand même partir pour garder le planning actif).
     if: always() && github.event_name == 'schedule' && needs.veille.outputs.lundi == 'true'
     runs-on: ubuntu-latest

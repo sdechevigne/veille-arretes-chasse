@@ -23,7 +23,7 @@ npm run typecheck    # vérification des types
 
 Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête de npm quand on lit le JSON produit) :
 
-- `collecter [--departements 24,50] [--sans-proxy] [--budget-min N]` : collecte des documents.
+- `collecter [--departements 24,50] [--sans-proxy] [--sortie-france] [--budget-min N]` : collecte des documents. Sans proxy, les sources `.gouv.fr` sont écartées ; `--sortie-france` (posé par le workflow une fois la sortie hide.me vérifiée en France) les rétablit en trafic direct ; `--sans-proxy` explicite reste prioritaire.
 - `lire [--limite N] [--budget-min N]` : lecture mécanique (texte, type, saison) ; dépose aussi dans R2 le PNG des pages scannées retenues (`<sha256>.page-<n>.png`), relu par le contrôle C1 de `lire-claude` (la machine de lecture Claude n'a pas poppler).
 - `images-pages [--limite N] [--budget-min N]` : rattrapage des images manquantes des documents déjà `a_lire` (`--limite` compte les documents traités) ; JSON `{ documents, images, erreurs }`, code 0 même si un document échoue.
 - `lire-claude [--limite N] [--budget-min N] [--budget-tokens N] [--departements 24,50]` : lecture Claude de la file ; statistiques JSON seules sur la sortie standard (journal sur la sortie d'erreur), tokens détaillés (`input`, `output`, `cache_creation`, `cache_read`), code 0 même à l'arrêt au quota (`arretQuota`) ou au budget de tokens (`arretBudget` : tous compteurs confondus, vérifié avant chaque document ; le workflow passe 2 000 000).
@@ -41,8 +41,8 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_VEILLE_BUCKET`
-- `VEILLE_PROXY_URL` : proxy HTTP français. Tant qu'il est absent, la collecte planifiée (cron) est suspendue ; le lancement manuel reste possible.
-- `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite, serveur `free-fr.hideservers.net`), réservés à l'intégration hide.me à venir ; pas encore utilisés par le workflow.
+- `VEILLE_PROXY_URL` (optionnel, secours) : proxy HTTP français, lu seulement quand la sortie hide.me n'est pas active (lancement manuel sans compte hide.me). Il ne conditionne plus le cron.
+- `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite, serveur `free-fr.hideservers.net`), utilisés par le workflow pour sortir par la France. Sans `HIDEME_USER`, le cron est suspendu ; le lancement manuel reste possible.
 - `VEILLE_OPENCODE_URL`, `VEILLE_OPENCODE_PASSWORD` (mot de passe facultatif) : adresse et accès de l'opencode local utilisé par `lire-claude` ; posés par `scripts/lecture-nocturne.sh`, jamais à la main. Sans URL, `lire-claude` s'arrête (code 2).
 - `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées.
 
@@ -85,9 +85,15 @@ Au premier lancement, opencode télécharge le plugin d'authentification Claude 
 
 Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France.
 
-État actuel : le workflow n'ouvre **aucune** connexion vers la France. La collecte passe par `VEILLE_PROXY_URL` quand ce secret est posé ; sans lui, le cron est suspendu, et un lancement manuel (option `sans_proxy` ou secret absent) écarte les sources `.gouv.fr` au lieu de les compter en panne.
+Le workflow ouvre une connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`, serveur gratuit `free-fr.hideservers.net`) avant la collecte et la referme à la fin. Recette et pièges : `docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md` §2 du dépôt meschasses. Points d'attention :
 
-À venir (tâche dédiée, pas encore dans le YAML) : connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`) avant la collecte, refermée ensuite. Essai concluant depuis GitHub Actions le 2026-10-14 (5 préfectures sur 5) ; points relevés : le client exige un terminal pour demander son jeton (lancé dans `script -qec`), identifiants passés par fichier de configuration (jamais en argument), délai maximal de 90 s pour la demande de jeton.
+- le client exige un terminal pour demander son jeton (lancé dans `script -qec`, délai maximal de 90 s) ;
+- les identifiants passent par un fichier de configuration (jamais en argument de commande) ;
+- l'étape « Connexion France » vérifie `https://ipinfo.io/country` = `FR`, sinon elle échoue en affichant la fin du journal hide.me ; la collecte reçoit alors `--sortie-france` ;
+- tout le trafic de la machine (Supabase, R2) passe par le VPN pendant le job ; la machine GitHub est jetable, rien à restaurer ;
+- lancement manuel avec l'option `sans_proxy` : pas de connexion hide.me, sources `.gouv.fr` écartées (fédérations seulement) ; sans compte hide.me, `VEILLE_PROXY_URL` sert de secours.
+
+Si les préfectures bloquent `free-fr`, les sources `prefecture_*` apparaîtront en erreur réseau : appliquer les plans de secours du document de référence (§3).
 
 ## Spécification
 

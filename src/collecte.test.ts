@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { collecter } from './collecte.ts'
+import { collecter, choisirAcces } from './collecte.ts'
 import { creerDepotMemoire } from './db.ts'
 import { creerArchiveMemoire } from './r2.ts'
 import { sha256 } from './empreinte.ts'
@@ -163,5 +163,23 @@ describe('collecter', () => {
     const stats = await collecter({ depot, archive: creerArchiveMemoire(), http }, { exclureHotes: h => h.endsWith('.gouv.fr') })
     expect(stats.sourcesEcartees).toBe(1); expect(stats.sourcesVisitees).toBe(1)
     expect(http.appels).toEqual(['https://fdc24.com/a.pdf']); expect(depot.etat.sources[0].verifiee_le).toBeNull()
+  })
+})
+
+describe('choisirAcces (--sans-proxy / --sortie-france)', () => {
+  it('ni proxy ni sortie France : les .gouv.fr sont écartées, trafic direct', () => {
+    expect(choisirAcces({ sansProxy: false, sortieFrance: false })).toEqual({ proxy: undefined, ecarterGouv: true })
+  })
+  it('proxy seul : utilisé, rien écarté (secours)', () => {
+    expect(choisirAcces({ sansProxy: false, sortieFrance: false, proxy: 'http://p:1' })).toEqual({ proxy: 'http://p:1', ecarterGouv: false })
+  })
+  it('--sortie-france sans proxy : les .gouv.fr ne sont plus écartées', () => {
+    expect(choisirAcces({ sansProxy: false, sortieFrance: true })).toEqual({ proxy: undefined, ecarterGouv: false })
+  })
+  it('--sortie-france avec proxy : trafic direct par la sortie France, proxy ignoré', () => {
+    expect(choisirAcces({ sansProxy: false, sortieFrance: true, proxy: 'http://p:1' })).toEqual({ proxy: undefined, ecarterGouv: false })
+  })
+  it('--sans-proxy explicite reste prioritaire, même avec --sortie-france', () => {
+    expect(choisirAcces({ sansProxy: true, sortieFrance: true, proxy: 'http://p:1' })).toEqual({ proxy: undefined, ecarterGouv: true })
   })
 })
