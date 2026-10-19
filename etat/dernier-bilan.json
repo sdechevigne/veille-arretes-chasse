@@ -1,0 +1,29 @@
+{
+  "genereLe": "2026-10-19T10:54:56.679Z",
+  "periodeJours": 7,
+  "sourcesEnPanne": 4,
+  "documents7j": {
+    "total": 42,
+    "parStatut": {
+      "a_lire": 42
+    },
+    "parType": {
+      "annuel": 40,
+      "ponctuel": 1,
+      "indetermine": 1
+    }
+  },
+  "propositions7j": {
+    "total": 0,
+    "parDecision": {}
+  },
+  "tokens7j": {
+    "input": 0,
+    "output": 0,
+    "cache_creation": 0,
+    "cache_read": 0
+  },
+  "deferes": [
+    "couverture des départements sans arrêté annuel en campagne (1er juin / 15 juillet)"
+  ]
+}
