@@ -83,6 +83,36 @@ describe('datesDe — jour nu suivi de « au <date> »', () => {
   })
 })
 
+describe('datesDe — « dernier jour de <mois> » (R45)', () => {
+  it('février : 28 ou 29 selon l’année déduite de la saison', () => {
+    expect(datesDe('du 1er septembre au dernier jour de février', '2026-2027')).toEqual(['2026-09-01', '2027-02-28'])
+    expect(datesDe('du 1er septembre au dernier jour de février', '2027-2028')).toEqual(['2027-09-01', '2028-02-29'])
+  })
+  it('année écrite : respectée, et refusée hors saison', () => {
+    expect(datesDe('au dernier jour de septembre 2026', '2026-2027')).toEqual(['2026-09-30'])
+    expect(datesDe('au dernier jour de février 2025', '2026-2027')).toEqual([])
+  })
+  it('variantes : majuscules, « d’octobre », sans accent', () => {
+    expect(datesDe('Au Dernier Jour de Février', '2026-2027')).toEqual(['2027-02-28'])
+    expect(datesDe("jusqu'au dernier jour d'octobre", '2026-2027')).toEqual(['2026-10-31'])
+    expect(datesDe('au dernier jour de fevrier', '2026-2027')).toEqual(['2027-02-28'])
+  })
+  it('dateIso lit le fragment seul', () => {
+    expect(dateIso('dernier jour de février', '2027-2028')).toEqual({ iso: '2028-02-29', anneeDeduite: true })
+    expect(dateIso('dernier jour de février 2027', '2026-2027')).toEqual({ iso: '2027-02-28', anneeDeduite: false })
+  })
+  it('position : la date couvre toute l’expression', () => {
+    const t = 'Du 1er Juin au dernier jour de février.'
+    expect(datesPositionnees(t, '2026-2027')).toEqual([
+      { iso: '2027-06-01', debut: 3, fin: 11 },
+      { iso: '2027-02-28', debut: 15, fin: 38 },
+    ])
+  })
+  it('compterDatesLarges la compte comme une date', () => {
+    expect(compterDatesLarges('du 1er septembre au dernier jour de février')).toBe(2)
+  })
+})
+
 describe('datesPositionnees', () => {
   it('chaque date valide avec sa position (jour nu : fin après le jour)', () => {
     const t = 'du 1 au 15 septembre 2026, puis le 2 octobre'

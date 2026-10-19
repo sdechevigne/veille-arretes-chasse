@@ -317,6 +317,21 @@ describe('verifierPreuves — preuve composée : l’espèce ouvre la ligne de s
   })
 })
 
+describe('verifierPreuves — « dernier jour de <mois> » (R45)', () => {
+  const citation = 'le renard peut être chassé :\n  Du 1er Juin au dernier jour de février'
+  const renard = (o: Partial<PeriodeLue> = {}) => periode({ citation, page: 1, espece_code: 'renard', date_ouverture: '2026-06-01', date_fermeture: '2027-02-28',
+    preuve: { article: '5', citation, page: 1, annee_deduite: true, extraits: [] }, ...o })
+  const pages = [page(1, 'Article 5 : le renard peut être chassé :\n  Du 1er Juin au dernier jour de février, à l’approche ou à l’affût.')]
+  it('renard 2026-06-01 → 2027-02-28, année déduite (comparée au jour-mois) → ok', () => {
+    const r = verifierPreuves(lecture([renard()]), pages, SAISON)
+    expect(r).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [], notes: [] })
+  })
+  it('une fermeture au 27 février n’est pas prouvée', () => {
+    const r = verifierPreuves(lecture([renard({ date_fermeture: '2027-02-27' })]), pages, SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente'])
+  })
+})
+
 describe('verifierPreuves — renvois aux dates générales', () => {
   it('cellule « Clôture générale » + clôture générale datée sur la page → ok, renvoi noté', () => {
     const r = verifierPreuves(lecture([chevreuilCloture()]), [page(1, `${CLOTURE}\n${TABLEAU_CLOTURE}`)], SAISON)
@@ -362,12 +377,33 @@ describe('verifierPreuves — renvois aux dates générales', () => {
       [page(1, `${CLOTURE}\n${TABLEAU_CLOTURE}`)], SAISON)
     expect(r.echecs.map(e => e.nature)).toEqual(['espece_absente'])
   })
-  it('le renvoi peut être porté par un extrait (cellule « Clôture / générale » coupée par la mise en page)', () => {
+  // R53 : un renvoi ne compte que contigu dans UN SEUL fragment ; la queue d'une cellule coupée (« Clôture » / « générale ») n'est
+  // jamais située, donc la cellule coupée ne prouve plus rien (elle était recollée avant R53).
+  it('cellule « Clôture / générale » coupée entre citation et extrait : plus recollée → échec (R53)', () => {
     const texte = `${CLOTURE}\nChevreuil          1er juin 2026          Clôture       - plan de chasse\n                                         générale      - du 1er juin à l’ouverture`
     const citation = 'Chevreuil          1er juin 2026          Clôture'
     const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'chevreuil', preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits: ['générale'] } })]),
       [page(1, texte)], SAISON)
-    expect(r.ok).toBe(true)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente'])
+    expect(r.details[0]).toBe("période 1 (chevreuil) : extrait « générale » n'apporte ni l'espèce, ni date, ni renvoi retenu")
+    expect(r.notes).toEqual([])
+  })
+  it('contre-exemple R53 : tête « Clôture » (ligne du chevreuil) + queue « générale » prise sur la ligne du sanglier → aucun renvoi', () => {
+    const texte = 'Chevreuil          1er juin 2026          Clôture le 31 janvier 2027\nSanglier           15 août 2026           Clôture générale\nArticle 4 : la clôture générale est fixée au 28 février 2027.'
+    const citation = 'Chevreuil          1er juin 2026          Clôture'
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'chevreuil', preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits: ['générale'] } })]),
+      [page(1, texte)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente'])
+    expect(r.notes).toEqual([])
+  })
+  it('renvoi contigu dans l’extrait seul → toujours admis (R53)', () => {
+    const texte = `Chevreuil          1er juin 2026\n                   Clôture générale\n${CLOTURE}`
+    const citation = 'Chevreuil          1er juin 2026'
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'chevreuil', preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits: ['Clôture générale'] } })]),
+      [page(1, texte)], SAISON)
+    expect(r).toMatchObject({ ok: true, echecs: [], notes: ['période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)'] })
   })
 })
 

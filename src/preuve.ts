@@ -96,8 +96,8 @@ function renvoi(date: string, ouverture: boolean, vus: RenvoiVu[], generales: Da
 interface Fragment { texte: string; debut: number; fin: number }
 interface Occurrence { debut: number; fin: number }
 interface DateSituee extends Occurrence { iso: string; fragment: Fragment }
-/** Renvoi situé sur la page ; `porteurs` = le ou les fragments qui en portent le texte (une cellule coupée est à cheval sur deux). */
-interface RenvoiSitue extends Occurrence { type: TypeRenvoi; relatif: RenvoiVu['relatif']; porteurs: Fragment[] }
+/** Renvoi situé sur la page, tout entier dans `fragment` (Ruling R53). */
+interface RenvoiSitue extends Occurrence { type: TypeRenvoi; relatif: RenvoiVu['relatif']; fragment: Fragment }
 
 const autreEspece = (t: string, espece: string): string | undefined =>
   Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
@@ -128,18 +128,10 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
   }
   const gardes = [citation, ...extraits.filter(e => !ambigus.has(e))]
   const dates = gardes.flatMap(datesDeFragment)
-  // Renvois cherchés sur la preuve recollée (une cellule « Clôture / générale » coupée par la mise en page est à cheval sur
-  // deux fragments), puis resitués sur la page par la TÊTE du motif : le fragment qui l'ouvre dit de quelle ligne vient la
-  // cellule ; la suite n'est qu'un raccord, dont la position propre (première occurrence d'un mot court) ne prouve rien.
-  const colle = gardes.map(tranche).join(' ')
-  let n = 0
-  const bornes = gardes.map(f => { const b = { f, debut: n }; n += tranche(f).length + 1; return b })
-  const borneDe = (i: number) => bornes.filter(b => i >= b.debut).pop()!
-  const renvois: RenvoiSitue[] = renvoisDe(colle).map(v => {
-    const a = borneDe(v.debut), z = borneDe(v.fin - 1)
-    return { type: v.type, relatif: v.relatif, debut: a.f.debut + (v.debut - a.debut),
-      fin: a.f === z.f ? a.f.debut + (v.fin - a.debut) : a.f.fin, porteurs: a.f === z.f ? [a.f] : [a.f, z.f] }
-  })
+  // Renvoi (Ruling R53) : contigu dans UN SEUL fragment, citation ou extrait. Aucun recollage entre fragments : la queue d'une
+  // cellule coupée (« Clôture » / « générale ») n'est jamais située, sa position ne prouverait rien.
+  const renvois: RenvoiSitue[] = gardes.flatMap(f => renvoisDe(tranche(f)).map(v => ({ type: v.type, relatif: v.relatif,
+    debut: f.debut + v.debut, fin: f.debut + v.fin, fragment: f })))
   const vu = (v: RenvoiSitue, ecarte?: string): RenvoiVu => ({ type: v.type, relatif: v.relatif, ...(ecarte ? { ecarte } : {}) })
   const uniques = (ds: DateSituee[]) => [...new Map(ds.map(d => [d.debut, d.iso])).values()]
   const occurrences = gardes.flatMap(especesDe)
@@ -151,11 +143,13 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
     const n = portes.filter(x => valide(s, x)).length, nm = portes.filter(x => valide(m, x)).length
     return n > nm || (n === nm && s.debut > m.debut) ? s : m
   })
-  // Extrait présent pour ses seules dates et renvois, tous écartés : ambigu (il ne porte pas non plus l'occurrence retenue).
+  // Extrait présent pour ses seules dates et renvois, tous écartés (ou qui n'apporte ni date, ni renvoi, ni espèce) : ambigu
+  // (il ne porte pas non plus l'occurrence retenue).
   for (const e of gardes.slice(1)) {
-    const siens = [...dates.filter(d => d.fragment === e), ...renvois.filter(v => v.porteurs.includes(e))].sort((a, b) => a.debut - b.debut)
-    if (!siens.length || siens.some(x => valide(occ, x))) continue
+    const siens = [...dates, ...renvois].filter(x => x.fragment === e).sort((a, b) => a.debut - b.debut)
+    if (siens.some(x => valide(occ, x))) continue
     if (occ.debut >= e.debut && occ.fin <= e.fin) continue
+    if (!siens.length) { if (!especesDe(e).length) ambigus.set(e, "n'apporte ni l'espèce, ni date, ni renvoi retenu"); continue }
     const x = siens[0]
     ambigus.set(e, x.debut < occ.fin ? "placé avant l'espèce" : `séparé de l'espèce par une autre espèce (${autreEspece(page.slice(occ.fin, x.fin), espece)})`)
   }
@@ -170,7 +164,7 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
       : `autre espèce entre l'espèce et la date : ${autreEspece(page.slice(occ.fin, d.fin), espece)}`)
   }
   // Renvois écartés (Ruling R52) : même règle de ligne ; ceux d'un extrait ambigu disparaissent avec lui.
-  const ecartes = renvois.filter(v => !valide(occ, v) && !v.porteurs.some(f => ambigus.has(f)))
+  const ecartes = renvois.filter(v => !valide(occ, v) && !ambigus.has(v.fragment))
     .map(v => vu(v, v.debut < occ.fin ? "renvoi placé avant l'espèce"
       : `autre espèce entre l'espèce et le renvoi : ${autreEspece(page.slice(occ.fin, v.fin), espece)}`))
   return { ambigus, dates: uniques(retenues), ecartees, renvois: [...renvois.filter(v => valide(occ, v)).map(v => vu(v)), ...ecartes] }
