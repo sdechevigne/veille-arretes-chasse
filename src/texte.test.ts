@@ -33,6 +33,9 @@ describe('normaliser (variantes)', () => {
   it("ramène les apostrophes OCR à l'apostrophe droite", () => {
     expect(normaliser('l‘ouverture l`ouverture lʼouverture l´ouverture')).toBe("l'ouverture l'ouverture l'ouverture l'ouverture")
   })
+  it('aplatit les retours à la ligne : une cellule « Ouverture / générale » sur deux lignes redevient contiguë', () => {
+    expect(normaliser('Ouverture\n   générale')).toBe('ouverture generale')
+  })
   it('ne touche que le « er » collé à un nombre', () => {
     expect(normaliser('Premier 1er 21er')).toBe('premier 1 21')
   })

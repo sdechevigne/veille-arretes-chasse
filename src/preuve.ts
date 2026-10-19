@@ -1,7 +1,7 @@
 // Contrôle C1 : chaque période (ou suppression) lue par Claude doit être appuyée par une citation exacte du texte,
 // portant l'espèce et les deux dates, complétée au besoin d'extraits voisins de la même page (arrêtés en tableau).
 // Une date absente de la preuve n'est admise que par un renvoi aux dates générales écrites dans l'arrêté. Module pur.
-import { datesDe } from './dates.ts'
+import { datesDe, premierePlage } from './dates.ts'
 import { ESPECES_RECHERCHE } from './lexique.ts'
 import { normaliser, trouverCitation } from './texte.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
@@ -32,7 +32,7 @@ export interface VerificationPreuves {
 
 /** Écart maximal (caractères du texte de page normalisé) entre le début de la citation et celui d'un extrait (Ruling R43). */
 export const DISTANCE_MAX_FRAGMENTS = 600
-/** Fenêtre (caractères normalisés) qui suit « ouverture générale » / « clôture générale », où sont lues les dates générales. */
+/** Fenêtre (caractères normalisés) qui suit « ouverture générale » / « clôture générale », où est lue la date générale. */
 export const FENETRE_DATES_GENERALES = 200
 // Expressions sur texte normalisé (accents retirés).
 const RE_OUVERTURE_GENERALE = /\bouverture generale\b/
@@ -42,17 +42,16 @@ const RE_LENDEMAIN = /\blendemain\b/
 
 export interface DatesGenerales { ouvertures: Set<string>; clotures: Set<string> }
 
-/** Dates écrites dans l'arrêté juste après « ouverture générale » (→ ouvertures) et « clôture / fermeture générale » (→ clôtures). */
+/** Dates générales écrites dans l'arrêté (Ruling R46) : après chaque « ouverture générale », la première date (→ ouvertures) ou
+ *  la première plage « du A au B » (A → ouvertures, B → clôtures) ; après « clôture / fermeture générale », la première date (→ clôtures). */
 export function datesGenerales(pages: PageTexte[], saison: string): DatesGenerales {
   const ouvertures = new Set<string>(), clotures = new Set<string>()
+  const apres = (t: string, re: RegExp) => [...t.matchAll(new RegExp(re.source, 'g'))]
+    .map(m => premierePlage(t.slice(m.index + m[0].length, m.index + m[0].length + FENETRE_DATES_GENERALES), saison)).filter(p => p !== null)
   for (const page of pages) {
     const t = normaliser(page.texte)
-    for (const [re, dates] of [[RE_OUVERTURE_GENERALE, ouvertures], [RE_CLOTURE_GENERALE, clotures]] as const) {
-      for (const m of t.matchAll(new RegExp(re.source, 'g'))) {
-        const fin = m.index + m[0].length
-        for (const d of datesDe(t.slice(fin, fin + FENETRE_DATES_GENERALES), saison)) dates.add(d)
-      }
-    }
+    for (const p of apres(t, RE_OUVERTURE_GENERALE)) { ouvertures.add(p.debut); if (p.fin) clotures.add(p.fin) }
+    for (const p of apres(t, RE_CLOTURE_GENERALE)) clotures.add(p.debut)
   }
   return { ouvertures, clotures }
 }

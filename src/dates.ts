@@ -27,12 +27,25 @@ export function dateIso(fragment: string, saison: string): { iso: string; anneeD
 const JOUR_NU = String.raw`\b(\d{1,2})(?:er|"|’|')?\s+au\s+(?=\d{1,2}(?:er|"|’|')?\s+(${MOIS})\b(?:\s+(20\d\d)\b)?)`
 const RE_DATES_PLAGES = new RegExp(`${JOUR_NU}|${RE_DATES.source}`, 'gi')
 
-// Toutes les dates ISO valides du texte, dans l'ordre.
-export function datesDe(t: string, saison: string): string[] {
+// Toutes les dates ISO valides du texte, dans l'ordre, avec leur position [debut, fin) ; jour nu : position du jour seul.
+export function datesPositionnees(t: string, saison: string): { iso: string; debut: number; fin: number }[] {
   return [...t.matchAll(RE_DATES_PLAGES)].flatMap(m => {
     const d = dateIso(m[1] ? [m[1], m[2], m[3]].filter(Boolean).join(' ') : m[0], saison)
-    return d ? [d.iso] : []
+    return d ? [{ iso: d.iso, debut: m.index, fin: m.index + (m[1] ? m[1].length : m[0].length) }] : []
   })
+}
+
+// Toutes les dates ISO valides du texte, dans l'ordre.
+export const datesDe = (t: string, saison: string): string[] => datesPositionnees(t, saison).map(d => d.iso)
+
+// Entre les deux dates d'une plage : « au » / « jusqu'au » seul (le suffixe d'un jour nu, « 1er au », compris).
+const RE_ENTRE_PLAGE = /^(?:er|"|’|')?\s*(?:au|jusqu'au|jusqu au)\s+$/i
+
+/** Première date du texte, et la suivante si les deux forment une plage « du A au B » ; null sans date. */
+export function premierePlage(t: string, saison: string): { debut: string; fin: string | null } | null {
+  const [a, b] = datesPositionnees(t, saison)
+  if (!a) return null
+  return { debut: a.iso, fin: b && RE_ENTRE_PLAGE.test(t.slice(a.fin, b.debut)) ? b.iso : null }
 }
 
 // Nombre de dates écrites dans le texte, avec ou sans année (« 1er septembre », « 15/08/2026 »), sans les valider.

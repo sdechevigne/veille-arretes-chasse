@@ -258,6 +258,35 @@ describe('datesGenerales', () => {
   })
 })
 
+describe('datesGenerales — première date ou première plage après chaque expression (R46)', () => {
+  const CHER = "1.1 - La période d’ouverture générale de la chasse à tir est fixée :\n\n      du 27 septembre 2026 au 28 février 2027\n\npour toutes les espèces de gibier"
+  it('« période d’ouverture générale … du A au B » : A → ouvertures, B → clôtures', () => {
+    const g = datesGenerales([page(1, CHER)], SAISON)
+    expect([...g.ouvertures]).toEqual(['2026-09-27'])
+    expect([...g.clotures]).toEqual(['2027-02-28'])
+  })
+  it('cellule « Clôture générale » sur une autre page : fermeture 2027-02-28 admise par la plage générale', () => {
+    const r = verifierPreuves(lecture([chevreuilCloture({ page: 2 })]), [page(1, CHER), page(2, TABLEAU_CLOTURE)], SAISON)
+    expect(r).toMatchObject({ ok: true, renvois: ['période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)'] })
+  })
+  it('bruit : seule la première date suit l’expression', () => {
+    const g = datesGenerales([page(1, "L'ouverture générale est fixée le 13 septembre 2026. Le 1er juin 2026, la chasse du chevreuil est ouverte.")], SAISON)
+    expect([...g.ouvertures]).toEqual(['2026-09-13'])
+    expect([...g.clotures]).toEqual([])
+  })
+  it('« clôture générale » : première date seulement, vers les clôtures', () => {
+    const g = datesGenerales([page(1, 'La clôture générale est fixée au 28 février 2027, sauf du 1er au 15 mars 2027.')], SAISON)
+    expect([...g.clotures]).toEqual(['2027-02-28'])
+    expect([...g.ouvertures]).toEqual([])
+  })
+  it('citation recopiée à cheval sur deux lignes (« Ouverture\\ngénérale ») : renvoi reconnu', () => {
+    const texte = "Article 1 : l'ouverture générale est fixée au 27 septembre 2026.\nArticle 3 : Faisan : de l'Ouverture\ngénérale au 31 janvier 2027."
+    const citation = "Faisan : de l'Ouverture\ngénérale au 31 janvier 2027"
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'faisan', date_ouverture: '2026-09-27', date_fermeture: '2027-01-31' })]), [page(1, texte)], SAISON)
+    expect(r).toMatchObject({ ok: true, renvois: ["période 1 (faisan) : date d'ouverture 2026-09-27 = ouverture générale (renvoi)"] })
+  })
+})
+
 describe('levableSurImage — extraits', () => {
   it('extrait introuvable levable si abîmé (≥ 0,5), jamais un extrait éloigné', () => {
     expect(levableSurImage({ page: 1, detail: '', nature: 'extrait_introuvable', score: 0.6 })).toBe(true)

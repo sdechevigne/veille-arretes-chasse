@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dateIso, datesDe, compterDatesLarges } from './dates.ts'
+import { dateIso, datesDe, datesPositionnees, premierePlage, compterDatesLarges } from './dates.ts'
 describe('dateIso', () => {
   it('lit les formes françaises courantes', () => {
     expect(dateIso('1er juin 2026', '2026-2027')).toEqual({ iso: '2026-06-01', anneeDeduite: false })
@@ -81,4 +81,30 @@ describe('datesDe — jour nu suivi de « au <date> »', () => {
     expect(datesDe('du 1er septembre au 15 octobre 2026', '2026-2027')).toEqual(['2026-09-01', '2026-10-15'])
     expect(datesDe('du 10 au 31 janvier 2027 inclus', '2026-2027')).toEqual(['2027-01-10', '2027-01-31'])
   })
+})
+
+describe('datesPositionnees', () => {
+  it('chaque date valide avec sa position (jour nu : fin après le jour)', () => {
+    const t = 'du 1 au 15 septembre 2026, puis le 2 octobre'
+    expect(datesPositionnees(t, '2026-2027')).toEqual([
+      { iso: '2026-09-01', debut: 3, fin: 4 },
+      { iso: '2026-09-15', debut: 8, fin: 25 },
+      { iso: '2026-10-02', debut: 35, fin: 44 },
+    ])
+    expect(datesPositionnees(t, '2026-2027').map(d => d.iso)).toEqual(datesDe(t, '2026-2027'))
+  })
+})
+
+describe('premierePlage', () => {
+  const S = '2026-2027'
+  it('première plage « du A au B » (au, jusqu’au, jour nu)', () => {
+    expect(premierePlage(' de la chasse est fixee : du 27 septembre 2026 au 28 fevrier 2027 pour toutes', S)).toEqual({ debut: '2026-09-27', fin: '2027-02-28' })
+    expect(premierePlage(" du 1 juin 2026 jusqu'au 14 aout 2026", S)).toEqual({ debut: '2026-06-01', fin: '2026-08-14' })
+    expect(premierePlage(' du 1 au 15 septembre 2026', S)).toEqual({ debut: '2026-09-01', fin: '2026-09-15' })
+  })
+  it('date seule : la suivante n’en fait pas une plage', () => {
+    expect(premierePlage(' est fixee le 13 septembre 2026. le 1 juin 2026, la chasse', S)).toEqual({ debut: '2026-09-13', fin: null })
+    expect(premierePlage(' au 31 janvier 2027 sur le territoire', S)).toEqual({ debut: '2027-01-31', fin: null })
+  })
+  it('aucune date → null', () => { expect(premierePlage(' de la chasse.', S)).toBeNull() })
 })
