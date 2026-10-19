@@ -269,6 +269,35 @@ describe('verifierPreuves — preuve composée : l’espèce ouvre la ligne de s
     expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee', 'date_ecartee'])
     expect(r.echecs.every(e => !levableSurImage(e))).toBe(true)
   })
+  // R52 : un renvoi (« Clôture générale ») obéit à la même règle de ligne qu'une date littérale.
+  it('renvoi pris sur la ligne du sanglier : extrait ambigu, fermeture non prouvée (R52)', () => {
+    const texte = 'Article 1 : la clôture générale est fixée au 28 février 2027.\nChevreuil          1er juin 2026          31 janvier 2027\nSanglier           15 août 2026           Clôture générale'
+    const r = verifierPreuves(lecture([chevreuil('Chevreuil          1er juin 2026', ['Sanglier           15 août 2026           Clôture générale'],
+      { date_ouverture: '2026-06-01', date_fermeture: '2027-02-28' })]), [page(1, texte)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente'])
+    expect(r.details[0]).toBe("période 1 (chevreuil) : extrait « Sanglier           15 août 2026           Clôture générale » séparé de l'espèce par une autre espèce (sanglier)")
+    expect(r.details.join(' ')).not.toContain('undefined')
+    expect(r.notes).toEqual([])
+  })
+  it('renvoi écarté dans un extrait conservé → date_ecartee, jamais de renvoi (R52)', () => {
+    const texte = `Article 1 : la clôture générale est fixée au 28 février 2027.\n${ENTETE}\nChevreuil          1er juin 2026\nSanglier           15 août 2026           Clôture générale`
+    const extrait = 'Chevreuil          1er juin 2026\nSanglier           15 août 2026           Clôture générale'
+    const r = verifierPreuves(lecture([chevreuil(`${ENTETE}\nChevreuil`, [extrait], { date_ouverture: '2026-06-01', date_fermeture: '2027-02-28' })]), [page(1, texte)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee'])
+    expect(r.details).toEqual(["période 1 (chevreuil) : date de fermeture 2027-02-28 écartée (autre espèce entre l'espèce et le renvoi : sanglier)"])
+    expect(r.notes).toEqual([])
+  })
+  it('ligne légitime « Lapin de garenne / Ouverture générale / Clôture générale » → ok, deux renvois notés (R52)', () => {
+    const texte = "Article 1 : l'ouverture générale est fixée au 27 septembre 2026 et la clôture générale au 28 février 2027."
+      + '\nLapin de garenne          Ouverture générale          Clôture générale\nSanglier                  15 août 2026                31 mars 2027'
+    const r = verifierPreuves(lecture([chevreuil('Lapin de garenne', ['Ouverture générale          Clôture générale'],
+      { espece_code: 'lapin', date_ouverture: '2026-09-27', date_fermeture: '2027-02-28' })]), [page(1, texte)], SAISON)
+    expect(r).toMatchObject({ ok: true, echecs: [], notes: [
+      "période 1 (lapin) : date d'ouverture 2026-09-27 = ouverture générale (renvoi)",
+      'période 1 (lapin) : date de fermeture 2027-02-28 = clôture générale (renvoi)',
+    ] })
+  })
   it('un renvoi aux dates générales ne ressuscite pas une date écartée (R51)', () => {
     const texte = `Article 1 : la clôture générale est fixée au 31 mars 2027.\nArticle 3 :\n${ENTETE}\n${LIGNES_CHEVREUIL_SANGLIER}`
     const r = verifierPreuves(lecture([chevreuil(`${ENTETE}\nChevreuil`, [LIGNES_CHEVREUIL_SANGLIER], { date_ouverture: '2026-06-01' })]), [page(1, texte)], SAISON)
