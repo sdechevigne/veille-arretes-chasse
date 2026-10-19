@@ -1,6 +1,5 @@
 [Unit]
 Description=Veille arrêtés — lecture Claude nocturne (opencode isolé, rotation Manta)
-After=network-online.target
 
 [Service]
 Type=oneshot

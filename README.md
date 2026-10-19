@@ -48,16 +48,18 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 
 ## Lecture nocturne sur la machine Manta
 
-Chaque nuit à 02:30 (Paris), `scripts/lecture-nocturne.sh` lit la file avec Claude : il met le code à jour (`git fetch` + avance rapide seulement, `npm ci` si le verrou a changé), lance un opencode isolé (port libre, mot de passe aléatoire, dossier de travail vide, environnement minimal sans aucun secret du robot, configuration `opencode/opencode.jsonc`), exécute `lire-claude` puis `notifier` si besoin, et arrête opencode. Code de sortie 0 même au quota ou au budget.
+Chaque nuit à 02:30 (Paris), `scripts/lecture-nocturne.sh` lit la file avec Claude : il met le code à jour (`git fetch` + avance rapide seulement ; si le réseau ou le clone l'empêche, il continue avec le code présent et le signale sur la sortie d'erreur), réinstalle les dépendances si le verrou a changé (`npm ci`), lance un opencode isolé (port libre, mot de passe aléatoire transmis à `curl` par `-K -` et non en argument, dossier de travail vide, environnement minimal sans aucun secret du robot, configuration `opencode/opencode.jsonc`), exécute `lire-claude` puis `notifier` si besoin, et arrête opencode. Code de sortie 0 même au quota ou au budget.
+
+Échec d'un passage (code non nul : mise à jour du code, `npm ci`, démarrage d'opencode, fournisseur `anthropic` absent, plantage de `lire-claude`, arrêt par délai de systemd) : une notification « passage nocturne en échec : <étape> » part par `scripts/notifier-echec.mjs` (node seul, sans dépendance, donc même si `npm ci` a échoué), puis le script sort avec le code d'échec pour que systemd l'enregistre. Sans fichier de secrets lisible (code 2), aucune notification n'est possible : seul le journal systemd le dit.
 
 Emplacements (machine, hors dépôt) :
 
 - clone de déploiement : `~/.local/share/veille-arretes/robot` (`git clone https://github.com/sdechevigne/veille-arretes-chasse …`, puis `npm ci`) ;
-- secrets du robot : `~/.config/veille-arretes/env` (mode `0600`, lignes `NOM=valeur` : `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_*`, `MANTA_WEBHOOK_*`) ; la lecture Claude ne fait que lire R2, le jeton R2 de cette machine est en lecture seule ;
+- secrets du robot : `~/.config/veille-arretes/env` (mode `0600`, lignes `NOM=valeur` : `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_*`, `MANTA_WEBHOOK_*`). Le script lit le fichier ligne à ligne **sans le faire interpréter par le shell** : la valeur est prise telle quelle jusqu'à la fin de la ligne, donc **sans guillemets ni échappement** (écrire avec `printf '%s=%s\n' NOM "$valeur"`) ; les lignes vides et `#…` sont ignorées, une ligne qui n'est pas `NOM=valeur` est signalée et ignorée. La lecture Claude ne fait que lire R2, le jeton R2 de cette machine est en lecture seule ;
 - état : `~/.local/state/veille-arretes/` (un fichier `passages/<horodatage>.json` par passage, gardé 30 jours ; `opencode.log` ; dossier `opencode/` de l'instance isolée) ;
-- l'authentification Claude (`~/.local/share/opencode/auth.json`) et le plugin `manta-accounts` (rotation des sièges) sont ceux de l'opencode principal de la machine : lien symbolique et copie à chaque passage.
+- l'authentification Claude (`~/.local/share/opencode/auth.json`) et le plugin `manta-accounts` (rotation des sièges) sont ceux de l'opencode principal de la machine : lien symbolique et copie à chaque passage. Le plugin `opencode-claude-auth` est épinglé en version exacte dans `opencode/opencode.jsonc` (changement à la main, après essai).
 
-Variables facultatives du script : `VEILLE_ETAT`, `VEILLE_SECRETS`, `OPENCODE_BIN` (emplacements), `VEILLE_LIMITE` (40 par défaut) et `VEILLE_DEPARTEMENTS` (essais ciblés, via `systemctl --user set-environment`).
+Variables facultatives du script : `VEILLE_ETAT`, `VEILLE_SECRETS`, `OPENCODE_BIN` (emplacements), `VEILLE_DELAI_PRET` (attente du démarrage d'opencode, 180 s par défaut), `VEILLE_LIMITE` (40 par défaut) et `VEILLE_DEPARTEMENTS` (essais ciblés, via `systemctl --user set-environment`).
 
 Déploiement :
 
@@ -74,9 +76,10 @@ Exploitation :
 systemctl --user start veille-arretes-lecture.service      # essai manuel (un vrai passage)
 journalctl --user -u veille-arretes-lecture -n 50           # sortie du dernier passage
 systemctl --user disable --now veille-arretes-lecture.timer # arrêt d'urgence
+bash scripts/tests/lecture-nocturne.test.sh                 # essai du script avec des doublures (à lancer via vmtest)
 ```
 
-Au premier lancement, opencode télécharge le plugin d'authentification Claude : le démarrage peut dépasser quelques dizaines de secondes (le script attend jusqu'à 60 s).
+Au premier lancement, opencode télécharge le plugin d'authentification Claude : le démarrage peut prendre plusieurs dizaines de secondes (le script attend jusqu'à 180 s, mesurés sur le temps écoulé).
 
 ## Accès aux sites des préfectures
 
