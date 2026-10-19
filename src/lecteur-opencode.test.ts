@@ -136,6 +136,94 @@ describe('creerLecteurOpencode — robustesse', () => {
   })
 })
 
+describe('creerLecteurOpencode — relance corrective unique (R45)', () => {
+  // Enchaîne les réponses de message : la n-ième requête de message reçoit la n-ième réponse (la dernière se répète).
+  const enchaine = (...reponses: ((init: RequestInit) => Response | Promise<Response>)[]) => {
+    let n = 0
+    return (init: RequestInit) => reponses[Math.min(n++, reponses.length - 1)](init)
+  }
+  const messages = (appels: Appel[]) => appels.filter(a => a.init.method === 'POST' && a.url.endsWith('/message'))
+  const tokens = (input: number) => ({ tokens: { input, output: 2, reasoning: 1, cache: { write: 3, read: 4 } } })
+  const lecteur = (f: typeof fetch) => creerLecteurOpencode({ url: 'http://x' }, f)
+
+  it('1re réponse hors schéma puis valide → ok, usage additionné, même session, erreur Ajv dans la relance', async () => {
+    const { f, appels } = fauxFetch(enchaine(() => message('{"b": 1}', tokens(10)), () => message('{"a": 1}', { ...tokens(20), modelID: 'claude-sonnet-5-5-bis' })))
+    const r = await lecteur(f).lire(REQ)
+    expect(r).toEqual({ ok: true, sortie: { a: 1 }, modele: 'claude-sonnet-5-5-bis', usage: { input: 30, output: 6, cache_creation: 6, cache_read: 8 } })
+    const posts = messages(appels)
+    expect(posts).toHaveLength(2)
+    expect(posts[1].url).toBe(posts[0].url)
+    const [c1, c2] = posts.map(p => JSON.parse(String(p.init.body)))
+    for (const k of ['agent', 'model', 'system', 'tools']) expect(c2[k]).toEqual(c1[k])
+    expect(c2.parts).toHaveLength(1)
+    expect(c2.parts[0].type).toBe('text')
+    expect(c2.parts[0].text).toContain('Ta réponse précédente ne respecte pas le schéma JSON demandé : ')
+    expect(c2.parts[0].text).toContain('required')
+    expect(c2.parts[0].text).toContain('Renvoie uniquement l\'objet JSON complet et corrigé, conforme au schéma, sans texte autour.')
+    expect(appels.filter(a => a.init.method === 'DELETE')).toHaveLength(1)
+  })
+  it('deux réponses hors schéma → schema (erreurs de la relance), exactement 2 envois', async () => {
+    const { f, appels } = fauxFetch(enchaine(() => message('{"b": 1}'), () => message('{"a": "x"}')))
+    const r = await lecteur(f).lire(REQ)
+    expect(r).toMatchObject({ ok: false, erreur: 'schema' })
+    expect(messageDe(r)).toContain('integer')
+    expect(messages(appels)).toHaveLength(2)
+    expect(appels.filter(a => a.init.method === 'DELETE')).toHaveLength(1)
+  })
+  it('1re réponse non JSON puis valide → ok ; l’erreur d’analyse figure dans la relance', async () => {
+    const { f, appels } = fauxFetch(enchaine(() => message('pas de json'), () => message('{"a": 1}')))
+    expect((await lecteur(f).lire(REQ)).ok).toBe(true)
+    expect(JSON.parse(String(messages(appels)[1].init.body)).parts[0].text).toContain('aucun objet JSON')
+  })
+  it('les erreurs rapportées dans la relance sont abrégées à 1 000 caractères', async () => {
+    const champs = Array.from({ length: 200 }, (_, i) => `champ_${i}`)
+    const gros = { ...SCHEMA, required: champs, properties: Object.fromEntries(champs.map(c => [c, { type: 'integer' }])) }
+    const { f, appels } = fauxFetch(enchaine(() => message('{}'), () => message('{}')))
+    await lecteur(f).lire({ ...REQ, schema: gros })
+    const texte: string = JSON.parse(String(messages(appels)[1].init.body)).parts[0].text
+    const debut = 'Ta réponse précédente ne respecte pas le schéma JSON demandé : '
+    const erreurs = texte.slice(debut.length, texte.indexOf(' Renvoie uniquement'))
+    expect(erreurs.length).toBeGreaterThan(900)
+    expect(erreurs.length).toBeLessThanOrEqual(1001)
+  })
+  it('MessageOutputLengthError → schema SANS relance', async () => {
+    const { f, appels } = fauxFetch(() => message('{"a"', { error: { name: 'MessageOutputLengthError', data: {} } }))
+    expect(await lecteur(f).lire(REQ)).toMatchObject({ ok: false, erreur: 'schema' })
+    expect(messages(appels)).toHaveLength(1)
+  })
+  it('quota, HTTP 500 et erreur de message inconnue → pas de relance', async () => {
+    for (const [rep, erreur] of [
+      [() => message('', { error: { name: 'APIError', data: { message: 'rate_limit_error', statusCode: 429 } } }), 'quota'],
+      [() => new Response('boum', { status: 500 }), 'cli'],
+      [() => message('', { error: { name: 'UnknownError', data: { message: 'x' } } }), 'cli'],
+    ] as const) {
+      const { f, appels } = fauxFetch(rep)
+      expect(await lecteur(f).lire(REQ)).toMatchObject({ ok: false, erreur })
+      expect(messages(appels)).toHaveLength(1)
+    }
+  })
+  it('échec de la relance elle-même (quota) → quota, pas de 3e envoi', async () => {
+    const { f, appels } = fauxFetch(enchaine(() => message('{"b": 1}'), () => message('', { error: { name: 'APIError', data: { message: 'rate_limit_error', statusCode: 429 } } })))
+    expect(await lecteur(f).lire(REQ)).toMatchObject({ ok: false, erreur: 'quota' })
+    expect(messages(appels)).toHaveLength(2)
+  })
+  it('délai : la relance partage l’échéance restante ; un dépassement donne timeout', async () => {
+    const attente = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+    let signalRelance: AbortSignal | undefined
+    const { f, appels } = fauxFetch(enchaine(
+      async () => { await attente(60); return message('{"b": 1}') },
+      (init) => { signalRelance = init.signal ?? undefined; return new Promise<Response>(() => {}) },
+    ))
+    const debut = Date.now()
+    const r = await lecteur(f).lire({ ...REQ, delaiMs: 100 })
+    expect(r).toMatchObject({ ok: false, erreur: 'timeout' })
+    expect(Date.now() - debut).toBeLessThan(180) // 100 ms au total, pas 60 + 100
+    expect(messages(appels)).toHaveLength(2)
+    expect(signalRelance?.aborted).toBe(true)
+    expect(appels.at(-1)).toMatchObject({ init: { method: 'DELETE' } })
+  })
+})
+
 describe('extraireJson', () => {
   it('prend l’objet du premier { au dernier }', () => { expect(extraireJson('Voici :\n{"a": {"b": 1}}\nFin')).toEqual({ a: { b: 1 } }) })
   it('lève sans objet', () => { expect(() => extraireJson('rien')).toThrow() })

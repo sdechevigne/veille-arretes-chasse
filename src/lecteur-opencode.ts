@@ -16,6 +16,11 @@ const estQuota = (t: string) => /rate.?limit|usage limit|\b429\b/i.test(t)
 const estDelai = (e: any) => e?.name === 'TimeoutError' || e?.name === 'AbortError'
 // Délai fixe des appels de gestion de session (création, suppression) : un serveur figé ne doit pas bloquer `lire`.
 const DELAI_SESSION_MS = 15_000
+// Longueur maximale des erreurs de schéma renvoyées au modèle dans la relance corrective.
+const ERREURS_RELANCE_MAX = 1_000
+type Usage = { input: number; output: number; cache_creation: number; cache_read: number }
+// Résultat d'un envoi de message : échec terminal (pas de relance), sortie valide, ou sortie hors schéma (relançable).
+type Envoi = { echec: ReponseLecture } | { modele: string; usage: Usage; sortie: unknown } | { modele: string; usage: Usage; invalide: string }
 
 export function extraireJson(texte: string): unknown {
   const debut = texte.indexOf('{'), fin = texte.lastIndexOf('}')
@@ -55,28 +60,41 @@ export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetc
         session = (await s.json() as { id: string }).id
         const corps = { agent: 'lecteur', model: { providerID: 'anthropic', modelID: MODELES_OPENCODE[req.modele] }, system: consigneSysteme(req), tools: { '*': false }, parts: parties(req) }
         etape = 'lecture'
-        // Le délai couvre l'envoi ET la lecture du corps : un signal expiré pendant `text()` est rapporté par le `catch` ci-dessous.
+        // Un seul signal pour les deux envois possibles (lecture + relance corrective) : `delaiMs` couvre l'ensemble, la relance n'a que l'échéance restante.
+        // Il couvre aussi la lecture du corps : un signal expiré pendant `text()` est rapporté par le `catch` ci-dessous.
         const signal = AbortSignal.timeout(delaiMs)
-        const r = await appeler(`/session/${session}/message`, { method: 'POST', body: JSON.stringify(corps), signal })
-        const brut = await r.text()
-        if (!r.ok) return echec(r.status === 429 ? 'quota' : 'cli', `HTTP ${r.status} ${brut}`)
-        const rep = JSON.parse(brut) as { info?: any; parts?: { type: string; text?: string; synthetic?: boolean }[] }
-        if (!rep.info || !Array.isArray(rep.parts)) return echec('cli', 'réponse opencode sans « info » ou sans « parts »')
-        const err = rep.info.error
-        if (err) {
-          const texte = `${err.name} ${err.data?.message ?? ''}`
-          if (err.data?.statusCode === 429 || estQuota(texte)) return echec('quota', texte)
-          if (err.name === 'MessageOutputLengthError') return echec('schema', 'sortie tronquée (longueur maximale atteinte)')
-          return echec('cli', texte)
+        const envoi = async (parts: object[]): Promise<Envoi> => {
+          const r = await appeler(`/session/${session}/message`, { method: 'POST', body: JSON.stringify({ ...corps, parts }), signal })
+          const brut = await r.text()
+          if (!r.ok) return { echec: echec(r.status === 429 ? 'quota' : 'cli', `HTTP ${r.status} ${brut}`) }
+          const rep = JSON.parse(brut) as { info?: any; parts?: { type: string; text?: string; synthetic?: boolean }[] }
+          if (!rep.info || !Array.isArray(rep.parts)) return { echec: echec('cli', 'réponse opencode sans « info » ou sans « parts »') }
+          const err = rep.info.error
+          if (err) {
+            const texte = `${err.name} ${err.data?.message ?? ''}`
+            if (err.data?.statusCode === 429 || estQuota(texte)) return { echec: echec('quota', texte) }
+            if (err.name === 'MessageOutputLengthError') return { echec: echec('schema', 'sortie tronquée (longueur maximale atteinte)') }
+            return { echec: echec('cli', texte) }
+          }
+          const texte = rep.parts.filter(p => p.type === 'text' && !p.synthetic).map(p => p.text ?? '').join('\n')
+          const t = rep.info.tokens ?? {}
+          const usage = { input: t.input ?? 0, output: (t.output ?? 0) + (t.reasoning ?? 0), cache_creation: t.cache?.write ?? 0, cache_read: t.cache?.read ?? 0 }
+          const modele = typeof rep.info.modelID === 'string' ? rep.info.modelID : MODELES_OPENCODE[req.modele]
+          let sortie: unknown
+          try { sortie = extraireJson(texte) } catch (e: any) { return { modele, usage, invalide: `réponse non JSON : ${e?.message ?? e}` } }
+          const invalide = validerSortie(req.schema, sortie)
+          return invalide ? { modele, usage, invalide } : { modele, usage, sortie }
         }
-        const texte = rep.parts.filter(p => p.type === 'text' && !p.synthetic).map(p => p.text ?? '').join('\n')
-        let sortie: unknown
-        try { sortie = extraireJson(texte) } catch (e: any) { return echec('schema', `réponse non JSON : ${e?.message ?? e}`) }
-        const invalide = validerSortie(req.schema, sortie)
-        if (invalide) return echec('schema', invalide)
-        const t = rep.info.tokens ?? {}
-        return { ok: true, sortie: sortie as LectureClaude, modele: typeof rep.info.modelID === 'string' ? rep.info.modelID : MODELES_OPENCODE[req.modele],
-          usage: { input: t.input ?? 0, output: (t.output ?? 0) + (t.reasoning ?? 0), cache_creation: t.cache?.write ?? 0, cache_read: t.cache?.read ?? 0 } }
+        const premier = await envoi(corps.parts)
+        if ('echec' in premier) return premier.echec
+        if (!('invalide' in premier)) return { ok: true, sortie: premier.sortie as LectureClaude, modele: premier.modele, usage: premier.usage }
+        // Sortie hors schéma : UNE relance corrective dans la même session (jamais plus), les erreurs en retour.
+        const second = await envoi([{ type: 'text', text: `Ta réponse précédente ne respecte pas le schéma JSON demandé : ${premier.invalide.slice(0, ERREURS_RELANCE_MAX)}. Renvoie uniquement l'objet JSON complet et corrigé, conforme au schéma, sans texte autour.` }])
+        if ('echec' in second) return second.echec
+        if ('invalide' in second) return echec('schema', second.invalide)
+        const [u1, u2] = [premier.usage, second.usage]
+        return { ok: true, sortie: second.sortie as LectureClaude, modele: second.modele,
+          usage: { input: u1.input + u2.input, output: u1.output + u2.output, cache_creation: u1.cache_creation + u2.cache_creation, cache_read: u1.cache_read + u2.cache_read } }
       } catch (e: any) {
         if (estDelai(e)) return echec('timeout', etape === 'lecture' ? `délai de ${delaiMs} ms dépassé` : `délai de ${DELAI_SESSION_MS} ms dépassé (${etape})`)
         return echec('cli', String(e?.message ?? e))
