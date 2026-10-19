@@ -177,14 +177,18 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
   return { ambigus, dates: uniques(retenues), ecartees, renvois: [...renvois.filter(v => valide(occ, v)).map(v => vu(v)), ...ecartes] }
 }
 
-/** Extrait situé à son occurrence exacte la plus proche du début de la citation (Ruling R54 ; à égalité, la première) ; sans
- *  occurrence exacte, recherche tolérante de trouverCitation. Positions sur la page normalisée. La citation, elle, garde
- *  sa première occurrence (trouverCitation). */
-function situerExtrait(extrait: string, pageNormalisee: string, texte: string, debutCitation: number): { ok: boolean; score: number; debut: number } {
+/** Extrait situé à son occurrence exacte la plus proche du début de la citation (Ruling R54 ; à égalité, la première) ; un
+ *  extrait qui porte l'espèce de la période (`motif`) est cherché d'abord AVANT la citation, la ligne d'une espèce commençant à
+ *  son nom (Ruling R57), puis après faute d'occurrence avant. Sans occurrence exacte, recherche tolérante de trouverCitation.
+ *  Positions sur la page normalisée. La citation, elle, garde sa première occurrence (trouverCitation). */
+function situerExtrait(extrait: string, pageNormalisee: string, texte: string, debutCitation: number, motif: RegExp | undefined)
+  : { ok: boolean; score: number; debut: number } {
   const e = normaliser(extrait)
-  let meilleur = -1
-  for (let i = e ? pageNormalisee.indexOf(e) : -1; i >= 0; i = pageNormalisee.indexOf(e, i + 1))
-    if (meilleur < 0 || Math.abs(i - debutCitation) < Math.abs(meilleur - debutCitation)) meilleur = i
+  const occurrences: number[] = []
+  for (let i = e ? pageNormalisee.indexOf(e) : -1; i >= 0; i = pageNormalisee.indexOf(e, i + 1)) occurrences.push(i)
+  const avant = motif?.test(e) ? occurrences.filter(i => i < debutCitation) : []
+  const candidates = avant.length ? avant : occurrences
+  const meilleur = candidates.reduce((m, i) => (m < 0 || Math.abs(i - debutCitation) < Math.abs(m - debutCitation) ? i : m), -1)
   return meilleur >= 0 ? { ok: true, score: 1, debut: meilleur } : trouverCitation(extrait, texte)
 }
 
@@ -235,7 +239,7 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     const pageNormalisee = normaliser(page.texte)
     const retenus: Fragment[] = []
     for (const extrait of extraits) {
-      const e = situerExtrait(extrait, pageNormalisee, page.texte, trouvee.debut)
+      const e = situerExtrait(extrait, pageNormalisee, page.texte, trouvee.debut, motif)
       if (!e.ok) { echouer('extrait_introuvable', `${prefixe}extrait « ${extrait} » introuvable (similarité ${pct(e.score)})`, e.score); continue }
       // Extrait inutile (Ruling R54) : ni espèce, ni date, ni mot de renvoi ; il ne prouve rien et n'est pas compté.
       if (extraitInutile(normaliser(extrait), saison)) { notes.push(`${prefixe}extrait « ${extrait} » sans espèce, date ni renvoi, ignoré`); continue }
@@ -270,8 +274,9 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       // Date écrite dans la preuve mais refusée par la règle de ligne (Ruling R51) : jamais levable, et aucun renvoi ne la rattrape.
       const ecartee = ecartees.get(cle(date))
       if (ecartee) { echecs.push({ page, nature: 'date_ecartee', detail: `${prefixe}date ${libelle} ${date} écartée (${ecartee})` }); continue }
-      // Renvoi admis seulement si la preuve porte au plus une date littérale (Ruling R48) : au-delà, elle décrit d'autres périodes.
-      const r = vues.length <= 1 ? renvoi(date, ouverture, verifiee.renvois, (generales ??= datesGenerales(pages, saison))) : null
+      // Renvoi admis seulement si la preuve porte au plus une date littérale distincte, comptée par valeur (Rulings R48, R57) :
+      // au-delà, elle décrit d'autres périodes ; une même date écrite deux fois (colonne des dates et des conditions) compte une fois.
+      const r = new Set(vues).size <= 1 ? renvoi(date, ouverture, verifiee.renvois, (generales ??= datesGenerales(pages, saison))) : null
       if (r && !r.ecarte) notes.push(`${prefixe}date ${libelle} ${date} = ${r.nom} (renvoi)`)
       // Renvoi présent mais refusé par la règle de ligne (Ruling R52) : la date est écartée, pas absente.
       else if (r) echecs.push({ page, nature: 'date_ecartee', detail: `${prefixe}date ${libelle} ${date} écartée (${r.ecarte})` })

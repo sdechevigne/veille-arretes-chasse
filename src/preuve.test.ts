@@ -570,6 +570,49 @@ describe('datesGenerales — première date ou première plage après chaque exp
   })
 })
 
+// R57 : R48 compte les dates littérales distinctes par valeur ; un extrait qui porte l'espèce est cherché d'abord avant la citation.
+describe('verifierPreuves — dates distinctes par valeur, extrait d’espèce avant la citation (R57)', () => {
+  // Cher (arrêté réel) : le « 1er septembre » est écrit dans la colonne des dates ET dans celle des conditions.
+  const CHER = "1.1 - La période d’ouverture générale de la chasse à tir est fixée :\n\n      du 27 septembre 2026 au 28 février 2027\n\n"
+    + ' Cerf élaphe            1er septembre                Clôture             - plan de chasse individuel obligatoire\n'
+    + '                              2026                   générale            - du 1er septembre à l’ouverture générale, sur\n'
+    + '                                                                         autorisation préfectorale individuelle, seuls les cerfs\n'
+  it('Cher : même date (1er septembre) écrite deux fois → une seule date distincte, renvoi « veille » admis', () => {
+    const citation = 'Cerf élaphe            1er septembre                Clôture'
+    const p = periode({ citation, page: 1, espece_code: 'cerf', date_ouverture: '2026-09-01', date_fermeture: '2026-09-26',
+      preuve: { article: '1', citation, page: 1, annee_deduite: true, extraits: ['du 1er septembre à l’ouverture générale, sur'] } })
+    expect(verifierPreuves(lecture([p]), [page(1, CHER)], SAISON)).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [],
+      notes: ["période 1 (cerf) : date de fermeture 2026-09-26 = veille de l'ouverture générale (renvoi)"] })
+  })
+  it('deux valeurs distinctes (battue) → toujours pas de renvoi', () => {
+    const texte = "Article 1 : l'ouverture générale est fixée au 27 septembre 2026.\nArticle 4 : faisan : de l'ouverture générale au 31 janvier 2027 ; en battue du 1er décembre 2026 au 31 janvier 2027."
+    const citation = "faisan : de l'ouverture générale au 31 janvier 2027 ; en battue du 1er décembre 2026 au 31 janvier 2027"
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'faisan', date_ouverture: '2026-09-27', date_fermeture: '2027-01-31' })]), [page(1, texte)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente'])
+    expect(r.notes).toEqual([])
+  })
+  // 35 (arrêté réel) : « Sanglier » en tête de ligne, « aux sangliers » dans la colonne des conditions, plus près après la citation.
+  const P35 = 'Sanglier                                      Chasse à l’affût, à l’approche ou\n                                              en battue\n\n'
+    + '                                              Se référer à l’arrêté préfectoral\n           1er juin 2026    31 mars 2027\n'
+    + '                                              relatif aux modalités d’exécution\n                                              du plan de gestion aux sangliers\n'
+  it('35 : extrait « Sanglier » situé à l’occurrence avant la citation (et non à « aux sangliers » après) → ok', () => {
+    const citation = '1er juin 2026    31 mars 2027'
+    const p = periode({ citation, page: 1, date_ouverture: '2026-06-01', date_fermeture: '2027-03-31',
+      preuve: { article: '2', citation, page: 1, annee_deduite: false, extraits: ['Sanglier'] } })
+    expect(verifierPreuves(lecture([p]), [page(1, P35)], SAISON)).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [],
+      notes: ['période 1 (sanglier) : espèce prouvée par extrait « Sanglier »'] })
+  })
+  it('R47 : « Chevreuil » avant la citation mais séparé par une autre espèce, et plus proche après → toujours refusé', () => {
+    const texte = `${PAGE_TABLEAU}\nChevreuil`
+    const citation = '15 août 2026         31 mars 2027'
+    const p = periode({ citation, page: 1, espece_code: 'chevreuil', date_ouverture: '2026-08-15', date_fermeture: '2027-03-31',
+      preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits: ['Chevreuil'] } })
+    const r = verifierPreuves(lecture([p]), [page(1, texte)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'espece_absente'])
+    expect(r.details[0]).toBe('période 1 (chevreuil) : extrait « Chevreuil » séparé de la citation par une autre espèce (sanglier)')
+  })
+})
+
 describe('levableSurImage — extraits', () => {
   it('extrait introuvable levable si abîmé (≥ 0,5), jamais un extrait éloigné ou ambigu', () => {
     expect(levableSurImage({ page: 1, detail: '', nature: 'extrait_ambigu' })).toBe(false)
