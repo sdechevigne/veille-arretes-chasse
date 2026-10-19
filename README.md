@@ -44,11 +44,11 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 - `VEILLE_PROXY_URL` (optionnel, secours) : proxy HTTP français, lu seulement quand la sortie hide.me n'est pas active (lancement manuel sans compte hide.me). Il ne conditionne plus le cron.
 - `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite, serveur `free-fr.hideservers.net`), utilisés par le workflow pour sortir par la France. Sans `HIDEME_USER`, le cron est suspendu ; le lancement manuel reste possible.
 - `VEILLE_OPENCODE_URL`, `VEILLE_OPENCODE_PASSWORD` (mot de passe facultatif) : adresse et accès de l'opencode local utilisé par `lire-claude` ; posés par `scripts/lecture-nocturne.sh`, jamais à la main. Sans URL, `lire-claude` s'arrête (code 2).
-- `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées.
+- `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées. Sur la machine Manta, le fichier de secrets porte l'adresse locale `http://127.0.0.1:8787/hook/<jeton>` (la machine se notifie elle-même, sans passer par Internet) ; GitHub garde l'adresse publique, pour le bilan hebdomadaire.
 
 ## Lecture nocturne sur la machine Manta
 
-Chaque nuit à 02:30 (Paris), `scripts/lecture-nocturne.sh` lit la file avec Claude : il met le code à jour (`git fetch` + avance rapide seulement ; si le réseau ou le clone l'empêche, il continue avec le code présent et le signale sur la sortie d'erreur), réinstalle les dépendances si le verrou a changé (`npm ci`), lance un opencode isolé (port libre, mot de passe aléatoire transmis à `curl` par `-K -` et non en argument, dossier de travail vide, environnement minimal sans aucun secret du robot, configuration `opencode/opencode.jsonc`), exécute `lire-claude` puis `notifier` si besoin, et arrête opencode. Code de sortie 0 même au quota ou au budget.
+Chaque nuit à 02:30 (Paris), `scripts/lecture-nocturne.sh` lit la file avec Claude : il met le code à jour (`git fetch`, borné à 60 s, + avance rapide seulement ; si le réseau ou le clone l'empêche, il continue avec le code présent et le signale sur la sortie d'erreur), réinstalle les dépendances si le verrou a changé (`npm ci --ignore-scripts` : aucun script d'installation de paquet n'est exécuté), lance un opencode isolé (port libre, mot de passe aléatoire transmis à `curl` par `-K -` et non en argument, dossier de travail vide, environnement minimal sans aucun secret du robot, configuration `opencode/opencode.jsonc`), exécute `lire-claude` puis `notifier` si besoin (propositions à vérifier, documents sans lecture, en erreur ou en attente d'images de pages, arrêt au quota ou au budget), et arrête opencode. Un document dont une page scannée à relire n'a pas encore son image reste à lire, sans décision ni erreur : il est repris le lendemain, une fois l'image produite par `images-pages`. Code de sortie 0 même au quota ou au budget.
 
 Échec d'un passage (code non nul : mise à jour du code, `npm ci`, démarrage d'opencode, fournisseur `anthropic` absent, plantage de `lire-claude`, arrêt par délai de systemd) : une notification « passage nocturne en échec : <étape> » part par `scripts/notifier-echec.mjs` (node seul, sans dépendance, donc même si `npm ci` a échoué), puis le script sort avec le code d'échec pour que systemd l'enregistre. Sans fichier de secrets lisible (code 2), aucune notification n'est possible : seul le journal systemd le dit.
 
@@ -85,12 +85,13 @@ Au premier lancement, opencode télécharge le plugin d'authentification Claude 
 
 Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France.
 
-Le workflow ouvre une connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`, serveur gratuit `free-fr.hideservers.net`) avant la collecte et la referme à la fin. Recette et pièges : `docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md` §2 du dépôt meschasses. Points d'attention :
+Le workflow ouvre une connexion hide.me vers la France (client Linux officiel `eventure/hide.client.linux`, serveur gratuit `free-fr.hideservers.net`) avant la collecte et la referme juste après (lecture mécanique, images et santé n'utilisent que R2 et Supabase, hors VPN). Recette et pièges : `docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md` §2 du dépôt meschasses. Points d'attention :
 
 - le client exige un terminal pour demander son jeton (lancé dans `script -qec`, délai maximal de 90 s) ;
 - les identifiants passent par un fichier de configuration (jamais en argument de commande) ;
-- l'étape « Connexion France » vérifie `https://ipinfo.io/country` = `FR`, sinon elle échoue en affichant la fin du journal hide.me ; la collecte reçoit alors `--sortie-france` ;
-- tout le trafic de la machine (Supabase, R2) passe par le VPN pendant le job ; la machine GitHub est jetable, rien à restaurer ;
+- l'étape « Connexion France » attend « Link: Up » dans le journal hide.me, puis vérifie le pays de sortie par Cloudflare (`https://www.cloudflare.com/cdn-cgi/trace`, ligne `loc=FR`), puis par `https://ipinfo.io/country` si Cloudflare ne répond pas `FR` ; la collecte reçoit alors `--sortie-france` ;
+- une étape hide.me en échec (client, jeton ou sortie non française, avec diagnostic réseau et fin du journal filtrée) ne coupe pas le job : la collecte tourne sans `--sortie-france` (sources `.gouv.fr` écartées) et la suite du job continue ;
+- tout le trafic de la machine (Supabase, R2) passe par le VPN pendant la collecte ; la machine GitHub est jetable, rien à restaurer ;
 - lancement manuel avec l'option `sans_proxy` : pas de connexion hide.me, sources `.gouv.fr` écartées (fédérations seulement) ; sans compte hide.me, `VEILLE_PROXY_URL` sert de secours.
 
 Si les préfectures bloquent `free-fr`, les sources `prefecture_*` apparaîtront en erreur réseau : appliquer les plans de secours du document de référence (§3).
