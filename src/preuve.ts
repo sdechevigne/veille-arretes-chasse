@@ -2,7 +2,7 @@
 // portant l'espèce et les deux dates, complétée au besoin d'extraits voisins de la même page (arrêtés en tableau).
 // Une date absente de la preuve n'est admise que par un renvoi aux dates générales écrites dans l'arrêté. Module pur.
 import { compterDatesLarges, datesDe, datesPositionnees, premierePlage } from './dates.ts'
-import { ESPECES_RECHERCHE } from './lexique.ts'
+import { compterEspeces, ESPECES_RECHERCHE } from './lexique.ts'
 import { normaliser, trouverCitation } from './texte.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
 
@@ -17,7 +17,7 @@ const SEUIL_NOMBRE_ALTERE = 0.9
 const pct = (x: number) => x.toFixed(2).replace('.', ',')
 
 export type NatureEchec = 'page_introuvable' | 'citation_introuvable' | 'nombre_altere' | 'espece_sans_motif' | 'espece_absente' | 'date_absente'
-  | 'date_ecartee' | 'extrait_introuvable' | 'extraits_eloignes' | 'extrait_ambigu'
+  | 'date_ecartee' | 'extrait_introuvable' | 'extraits_eloignes' | 'extrait_ambigu' | 'tableau_colonnes'
 /** Échec C1 d'un élément, avec la page déclarée par sa preuve (aiguillage texte natif / scan) ; `score` = similarité
  *  de la meilleure fenêtre pour une citation non retrouvée. */
 export interface EchecPreuve { page: number; detail: string; nature: NatureEchec; score?: number }
@@ -40,12 +40,36 @@ const RE_CLOTURE_GENERALE = /\b(?:cloture|fermeture) generale\b/
 
 export interface DatesGenerales { ouvertures: Set<string>; clotures: Set<string> }
 
+/** Fenêtre (caractères normalisés) qui précède une mention, où est cherché ce qui en fait un renvoi (Ruling R61). */
+export const FENETRE_AVANT_MENTION = 30
+// Mention précédée (article compris) de veille / lendemain / à / jusqu'à / jusqu'au / avant / dérogation / de / du / dès : c'est
+// une borne qui renvoie aux dates générales (« de l'ouverture générale au 31 janvier », « par dérogation à l'ouverture générale
+// du 1er juin au 26 septembre »), jamais leur définition. « de » s'ajoute à la liste du Ruling R61 : sans lui, « de l'ouverture
+// générale au 31 janvier 2027 » verserait le 31 janvier aux ouvertures, qui ne porteraient plus une valeur unique.
+const RE_AVANT_RENVOI = /(?:^|[\s'])(?:veille|lendemain|a|au|avant|derogation|de|des|du)\s(?:la\s|l'\s?|l\s)?$/
+// « dérogation » plus haut dans la même proposition (avant tout « . ; : »).
+const RE_DEROGATION = /\bderogation\b[^.;:]*$/
+const mentionDeRenvoi = (t: string, i: number) => {
+  const avant = t.slice(Math.max(0, i - FENETRE_AVANT_MENTION), i)
+  return RE_AVANT_RENVOI.test(avant) || RE_DEROGATION.test(avant)
+}
+
+// La fenêtre d'une mention s'arrête au premier nom d'espèce ou à la mention générale suivante : une cellule de tableau
+// « Ouverture générale » suivie de la ligne d'une autre espèce ne lui prête pas ses dates (Ruling R61).
+const BORNES_FENETRE = [...Object.values(ESPECES_RECHERCHE), RE_SIKA, RE_OUVERTURE_GENERALE, RE_CLOTURE_GENERALE]
+const fenetreApres = (t: string, i: number) => {
+  const w = t.slice(i, i + FENETRE_DATES_GENERALES)
+  return w.slice(0, Math.min(w.length, ...BORNES_FENETRE.map(re => w.search(re)).filter(j => j >= 0)))
+}
+
 /** Dates générales écrites dans l'arrêté (Ruling R46) : après chaque « ouverture générale », la première date (→ ouvertures) ou
- *  la première plage « du A au B » (A → ouvertures, B → clôtures) ; après « clôture / fermeture générale », la première date (→ clôtures). */
+ *  la première plage « du A au B » (A → ouvertures, B → clôtures) ; après « clôture / fermeture générale », la première date (→ clôtures).
+ *  Ruling R61 : les mentions qui sont elles-mêmes des renvois (mentionDeRenvoi) ne comptent pas, et la date doit précéder tout
+ *  nom d'espèce et toute autre mention générale (fenetreApres). */
 export function datesGenerales(pages: PageTexte[], saison: string): DatesGenerales {
   const ouvertures = new Set<string>(), clotures = new Set<string>()
-  const apres = (t: string, re: RegExp) => [...t.matchAll(new RegExp(re.source, 'g'))]
-    .map(m => premierePlage(t.slice(m.index + m[0].length, m.index + m[0].length + FENETRE_DATES_GENERALES), saison)).filter(p => p !== null)
+  const apres = (t: string, re: RegExp) => [...t.matchAll(new RegExp(re.source, 'g'))].filter(m => !mentionDeRenvoi(t, m.index))
+    .map(m => premierePlage(fenetreApres(t, m.index + m[0].length), saison)).filter(p => p !== null)
   for (const page of pages) {
     const t = normaliser(page.texte)
     for (const p of apres(t, RE_OUVERTURE_GENERALE)) { ouvertures.add(p.debut); if (p.fin) clotures.add(p.fin) }
@@ -79,22 +103,34 @@ const renvoisDe = (t: string): (RenvoiVu & Occurrence)[] => [...t.matchAll(RE_RE
   debut: m.index, fin: m.index + m[0].length,
 }))
 
+/** Renvoi qui répond à une date ; `ambigu` = nombre de valeurs de l'ensemble général visé quand il en porte plusieurs (Ruling R61). */
+interface RenvoiTrouve { nom: string; ecarte?: string; ambigu?: number }
+
 /** Renvoi de la preuve qui justifierait une date absente, ou null : une date d'ouverture renvoie à l'ouverture générale, une
- *  date de fermeture à la clôture générale ; « la veille de » / « le lendemain de » l'une ou l'autre décale d'un jour ;
- *  « (jusqu')à l'ouverture générale » ne prouve qu'une fermeture, la veille de l'ouverture générale (Ruling R54).
- *  `vus` porte les renvois retenus en tête ; celui qui répond rend sa raison d'écartement s'il en a une (Ruling R52). */
-function renvoi(date: string, ouverture: boolean, vus: RenvoiVu[], generales: DatesGenerales): { nom: string; ecarte?: string } | null {
+ *  date de fermeture à la clôture générale, par un renvoi direct (sans décalage, Ruling R61) ; « la veille de » / « le lendemain
+ *  de » l'une ou l'autre décale d'un jour ; « (jusqu')à l'ouverture générale » ne prouve qu'une fermeture, la veille de
+ *  l'ouverture générale (Ruling R54). `vus` porte les renvois retenus en tête ; celui qui répond rend sa raison d'écartement
+ *  s'il en a une (Ruling R52), et `ambigu` si l'ensemble visé porte plus d'une valeur (Ruling R61 : renvoi alors refusé). */
+function renvoi(date: string, ouverture: boolean, vus: RenvoiVu[], generales: DatesGenerales): RenvoiTrouve | null {
+  const tester = (ensemble: 'ouvertures' | 'clotures', cible: string, nom: string, x: RenvoiVu): RenvoiTrouve | null => {
+    const valeurs = generales[ensemble]
+    if (!valeurs.has(cible)) return null
+    return { nom, ...(x.ecarte ? { ecarte: x.ecarte } : {}), ...(valeurs.size > 1 ? { ambigu: valeurs.size } : {}) }
+  }
   const direct = RENVOIS[ouverture ? 'ouverture' : 'cloture']
-  const v = vus.find(x => x.relatif !== 'jusqua' && (x.type === 'ouverture') === ouverture)
-  if (v && generales[direct.ensemble].has(date)) return { nom: direct.nom, ecarte: v.ecarte }
+  const v = vus.find(x => x.relatif === null && (x.type === 'ouverture') === ouverture)
+  const r = v ? tester(direct.ensemble, date, direct.nom, v) : null
+  if (r) return r
   for (const x of vus) {
     if (x.relatif === 'jusqua') {
-      if (!ouverture && generales.ouvertures.has(decaler(date, 1))) return { nom: `veille de ${RENVOIS.ouverture.defini}`, ecarte: x.ecarte }
+      const j = ouverture ? null : tester('ouvertures', decaler(date, 1), `veille de ${RENVOIS.ouverture.defini}`, x)
+      if (j) return j
       continue
     }
     if (!x.relatif) continue
     const cible = RENVOIS[x.type]
-    if (generales[cible.ensemble].has(decaler(date, x.relatif === 'veille' ? 1 : -1))) return { nom: `${x.relatif} de ${cible.defini}`, ecarte: x.ecarte }
+    const d = tester(cible.ensemble, decaler(date, x.relatif === 'veille' ? 1 : -1), `${x.relatif} de ${cible.defini}`, x)
+    if (d) return d
   }
   return null
 }
@@ -105,6 +141,27 @@ interface Occurrence { debut: number; fin: number }
 interface DateSituee extends Occurrence { iso: string; fragment: Fragment }
 /** Renvoi situé sur la page, tout entier dans `fragment` (Ruling R53). */
 interface RenvoiSitue extends Occurrence { type: TypeRenvoi; relatif: RenvoiVu['relatif']; fragment: Fragment }
+
+// Toutes les espèces, motifs globaux (positions). Entre deux noms : un espace, ou un seul mot qualificatif d'au moins trois
+// lettres (« Cerf élaphe », « Perdrix grise ») ; ni une liste en prose (« lièvre, perdrix et faisan »), ni un bruit d'OCR d'une
+// ou deux lettres (« Chevreuil P Cerf », arrêté réel du 69 : une cellule de dates commune à plusieurs espèces).
+const ESPECES_GLOBALES = Object.entries(ESPECES_RECHERCHE).map(([code, re]) => [code, new RegExp(re.source, `${re.flags.replace('g', '')}g`)] as const)
+const MOT_DE_LIAISON = /^(?:et|ou|a|au|aux|de|du|des|la|le|les|l|d)$/
+const RE_SEPARATEUR_COLONNE = /^ (?:([\p{L}'-]{3,}) )?$/u
+
+/** Tableau extrait colonne par colonne (Ruling R61) : deux noms d'espèces différentes à la suite dans le texte normalisé,
+ *  séparés d'un simple espace ou d'un seul mot qualificatif, sans date ni ponctuation entre eux (« Cerf Chevreuil Lièvre
+ *  01/06/2026 … »). Une ligne espèce → dates ne peut alors plus être reconstituée. */
+export function tableauEnColonnes(t: string): boolean {
+  const occ = ESPECES_GLOBALES.flatMap(([code, re]) => [...t.matchAll(re)].map(m => ({ code, debut: m.index, fin: m.index + m[0].length })))
+    .sort((a, b) => a.debut - b.debut)
+  return occ.some((o, i) => {
+    const s = occ[i + 1]
+    if (!s || s.code === o.code) return false
+    const m = RE_SEPARATEUR_COLONNE.exec(t.slice(o.fin, s.debut))
+    return !!m && !(m[1] && MOT_DE_LIAISON.test(m[1]))
+  })
+}
 
 const autreEspece = (t: string, espece: string): string | undefined =>
   Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
@@ -247,9 +304,17 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       if (ecart > DISTANCE_MAX_FRAGMENTS) { echouer('extraits_eloignes', `${prefixe}extrait « ${extrait} » trop éloigné de la citation (${ecart} caractères)`); continue }
       retenus.push(fragment(extrait, e.debut))
     }
-    // Preuve composée : l'espèce ouvre la ligne de ses dates (R47, R50) ; une preuve sans extrait reste inchangée.
+    // Citation seule à cheval sur plusieurs lignes de tableau (Ruling R61) : au moins deux espèces et plus de deux dates distinctes.
+    const citee = normaliser(citation)
+    const plusieursLignes = compterEspeces(citee) >= 2 && new Set(datesDe(citee, saison)).size > 2
+    // Tableau lu en colonnes (Ruling R61) : preuve composée ou à plusieurs lignes, rattachement espèce / date impossible ; jamais levable.
+    if ((retenus.length || plusieursLignes || tableauEnColonnes(citee)) && (tableauEnColonnes(pageNormalisee) || tableauEnColonnes(citee))) {
+      echouer('tableau_colonnes', `${prefixe}tableau lu en colonnes : rattachement espèce/date impossible`); return null
+    }
+    // Preuve composée : l'espèce ouvre la ligne de ses dates (R47, R50), règle appliquée aussi à une citation à plusieurs lignes ;
+    // une preuve simple (sans extrait, une ligne) reste inchangée.
     const cite = fragment(citation, trouvee.debut)
-    const composee = retenus.length && motif ? preuveComposee(normaliser(page.texte), cite, retenus, motif, espece, saison) : null
+    const composee = (retenus.length || plusieursLignes) && motif ? preuveComposee(pageNormalisee, cite, retenus, motif, espece, saison) : null
     const ambigus = composee?.ambigus ?? new Map<Fragment, string>()
     for (const [e, raison] of ambigus) echouer('extrait_ambigu', `${prefixe}extrait « ${e.texte} » ${raison}`)
     const preuve = [cite, ...retenus.filter(e => !ambigus.has(e))]
@@ -277,9 +342,11 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       // Renvoi admis seulement si la preuve porte au plus une date littérale distincte, comptée par valeur (Rulings R48, R57) :
       // au-delà, elle décrit d'autres périodes ; une même date écrite deux fois (colonne des dates et des conditions) compte une fois.
       const r = new Set(vues).size <= 1 ? renvoi(date, ouverture, verifiee.renvois, (generales ??= datesGenerales(pages, saison))) : null
-      if (r && !r.ecarte) notes.push(`${prefixe}date ${libelle} ${date} = ${r.nom} (renvoi)`)
       // Renvoi présent mais refusé par la règle de ligne (Ruling R52) : la date est écartée, pas absente.
-      else if (r) echecs.push({ page, nature: 'date_ecartee', detail: `${prefixe}date ${libelle} ${date} écartée (${r.ecarte})` })
+      if (r?.ecarte) echecs.push({ page, nature: 'date_ecartee', detail: `${prefixe}date ${libelle} ${date} écartée (${r.ecarte})` })
+      // Dates générales à plusieurs valeurs (Ruling R61) : aucune ne peut être choisie, le renvoi est refusé.
+      else if (r?.ambigu) echecs.push({ page, nature: 'date_absente', detail: `${prefixe}date ${libelle} ${date} absente de la citation (dates générales ambiguës (${r.ambigu} valeurs))` })
+      else if (r) notes.push(`${prefixe}date ${libelle} ${date} = ${r.nom} (renvoi)`)
       else echecs.push({ page, nature: 'date_absente', detail: `${prefixe}date ${libelle} ${date} absente de la citation` })
     }
   })

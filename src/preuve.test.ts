@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { datesGenerales, DISTANCE_MAX_FRAGMENTS, levableSurImage, verifierPreuves } from './preuve.ts'
+import { readFileSync } from 'node:fs'
+import { datesGenerales, DISTANCE_MAX_FRAGMENTS, levableSurImage, tableauEnColonnes, verifierPreuves } from './preuve.ts'
+import { normaliser } from './texte.ts'
 import type { LectureClaude, PageTexte, PeriodeLue } from './types.ts'
 
 const page = (n: number, texte: string): PageTexte => ({ n, source: 'native', texte, nbDates: 0, nbEspeces: 0 })
@@ -462,9 +464,9 @@ describe('verifierPreuves — extrait inutile ignoré (R54)', () => {
     const texte = 'Chevreuil\nSanglier\n                   1er juin 2026        28 février 2027'
     const r = verifierPreuves(lecture([enTableau(['Chevreuil', 'Sanglier'])]), [page(1, texte)], SAISON)
     expect(r.ok).toBe(false)
-    // « Sanglier » porte une espèce : jamais ignoré ; il sépare « Chevreuil » des dates (R47).
-    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'espece_absente'])
-    expect(r.details[0]).toBe('période 1 (chevreuil) : extrait « Chevreuil » séparé de la citation par une autre espèce (sanglier)')
+    // « Sanglier » porte une espèce : jamais ignoré. Depuis R61, « Chevreuil » et « Sanglier » à la suite sans date entre eux font
+    // de la page un tableau lu en colonnes : refus avant même la règle de ligne (R47).
+    expect(r.echecs).toEqual([{ page: 1, nature: 'tableau_colonnes', detail: 'période 1 (chevreuil) : tableau lu en colonnes : rattachement espèce/date impossible' }])
     expect(r.notes).toEqual([])
   })
 })
@@ -610,6 +612,130 @@ describe('verifierPreuves — dates distinctes par valeur, extrait d’espèce a
     const r = verifierPreuves(lecture([p]), [page(1, texte)], SAISON)
     expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'espece_absente'])
     expect(r.details[0]).toBe('période 1 (chevreuil) : extrait « Chevreuil » séparé de la citation par une autre espèce (sanglier)')
+  })
+})
+
+// R47 verrouillé : un extrait d'espèce qui n'existe qu'APRÈS la citation n'apporte jamais l'espèce.
+describe('verifierPreuves — extrait d’espèce seulement après la citation (R47)', () => {
+  it('« Chevreuil » écrit seulement après les dates → extrait_ambigu, espèce absente, non levable', () => {
+    const texte = 'Article 3 : 1er juin 2026        28 février 2027\nvoir le tableau suivant\nChevreuil : plan de chasse'
+    const r = verifierPreuves(lecture([enTableau(['Chevreuil'])]), [page(1, texte)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'espece_absente'])
+    expect(r.details[0]).toBe('période 1 (chevreuil) : extrait « Chevreuil » après la citation')
+    expect(levableSurImage(r.echecs[0])).toBe(false)
+    expect(r.notes).toEqual([])
+  })
+})
+
+// R61 (1) : les mentions qui sont elles-mêmes des renvois (veille, lendemain, à, jusqu'à, avant, dérogation, de) ne définissent
+// aucune date générale ; un renvoi n'est admis que si l'ensemble général concerné porte une seule valeur.
+describe('datesGenerales — mentions de renvoi exclues, valeur unique (R61)', () => {
+  const GENERALE = "Article 1 : la période d'ouverture générale de la chasse à tir est fixée du 27 septembre 2026 au 28 février 2027."
+  it('« ouvert par dérogation à l’ouverture générale du 1er juin 2026 au 26 septembre 2026 » : ensembles non pollués', () => {
+    const g = datesGenerales([page(1, `${GENERALE}\nArticle 2 : le chevreuil est ouvert par dérogation à l'ouverture générale du 1er juin 2026 au 26 septembre 2026.`)], SAISON)
+    expect([...g.ouvertures]).toEqual(['2026-09-27'])
+    expect([...g.clotures]).toEqual(['2027-02-28'])
+  })
+  it('renvoi pris comme borne (« de l’ouverture générale au 31 janvier 2027 », « veille de la clôture générale ») : rien ajouté', () => {
+    const g = datesGenerales([page(1, `${GENERALE}\nArticle 4 : faisan : de l'ouverture générale au 31 janvier 2027. Le renard : jusqu'à la veille de la clôture générale, puis du 1er mars 2027.`)], SAISON)
+    expect([...g.ouvertures]).toEqual(['2026-09-27'])
+    expect([...g.clotures]).toEqual(['2027-02-28'])
+  })
+  it('cellule « Ouverture générale » suivie de la ligne d’une autre espèce : la date de cette ligne n’est pas prise', () => {
+    const g = datesGenerales([page(1, "Article 1 : l'ouverture générale est fixée au 27 septembre 2026.\nLapin    Ouverture générale    Clôture générale\nSanglier    15 août 2026    31 mars 2027")], SAISON)
+    expect([...g.ouvertures]).toEqual(['2026-09-27'])
+    expect([...g.clotures]).toEqual([])
+  })
+  it('deux ouvertures générales réellement différentes → renvoi refusé, date_absente « dates générales ambiguës (2 valeurs) »', () => {
+    const texte = "Article 1 : l'ouverture générale est fixée au 27 septembre 2026.\nArticle 2 : en zone de montagne, l'ouverture générale est fixée au 13 septembre 2026."
+      + "\nArticle 4 : faisan : de l'ouverture générale au 31 janvier 2027."
+    const r = verifierPreuves(lecture([periode({ citation: "faisan : de l'ouverture générale au 31 janvier 2027", page: 1, espece_code: 'faisan', date_ouverture: '2026-09-27', date_fermeture: '2027-01-31' })]), [page(1, texte)], SAISON)
+    expect(r.echecs).toEqual([{ page: 1, nature: 'date_absente', detail: "période 1 (faisan) : date d'ouverture 2026-09-27 absente de la citation (dates générales ambiguës (2 valeurs))" }])
+    expect(r.notes).toEqual([])
+  })
+})
+
+// R61 (2) : un renvoi relatif (veille / lendemain) ne vaut jamais renvoi direct.
+describe('verifierPreuves — renvoi direct = renvoi sans décalage (R61)', () => {
+  it('« le lendemain de l’ouverture générale » ne prouve pas une ouverture égale à l’ouverture générale', () => {
+    const texte = "Article 1 : l'ouverture générale est fixée au 13 septembre 2026.\nArticle 4 : le lapin est chassé du lendemain de l'ouverture générale au 31 janvier 2027."
+    const lapin = (date_ouverture: string) => periode({ citation: "le lapin est chassé du lendemain de l'ouverture générale au 31 janvier 2027", page: 1, espece_code: 'lapin', date_ouverture, date_fermeture: '2027-01-31' })
+    expect(verifierPreuves(lecture([lapin('2026-09-13')]), [page(1, texte)], SAISON).echecs.map(e => e.nature)).toEqual(['date_absente'])
+    expect(verifierPreuves(lecture([lapin('2026-09-14')]), [page(1, texte)], SAISON)).toMatchObject({ ok: true,
+      notes: ["période 1 (lapin) : date d'ouverture 2026-09-14 = lendemain de l'ouverture générale (renvoi)"] })
+  })
+  it('« jusqu’à la veille de la clôture générale » ne prouve pas une fermeture égale à la clôture générale', () => {
+    const texte = "Article 1 : la clôture générale est fixée au 28 février 2027.\nArticle 5 : le renard est chassé du 1er juin 2026 jusqu'à la veille de la clôture générale."
+    const renard = (date_fermeture: string) => periode({ citation: "le renard est chassé du 1er juin 2026 jusqu'à la veille de la clôture générale", page: 1, espece_code: 'renard', date_ouverture: '2026-06-01', date_fermeture })
+    expect(verifierPreuves(lecture([renard('2027-02-28')]), [page(1, texte)], SAISON).echecs.map(e => e.nature)).toEqual(['date_absente'])
+    expect(verifierPreuves(lecture([renard('2027-02-27')]), [page(1, texte)], SAISON).ok).toBe(true)
+  })
+})
+
+// R61 (3) : une citation seule qui couvre plusieurs lignes de tableau (≥ 2 espèces, > 2 dates distinctes) suit la règle de ligne.
+describe('verifierPreuves — citation à cheval sur plusieurs lignes (R61)', () => {
+  const TABLEAU = 'Espèces     Ouverture     Fermeture\nCerf        01/06/2026    30/09/2026\nLièvre      18/10/2026    22/11/2026'
+  const CITATION = 'Cerf        01/06/2026    30/09/2026\nLièvre      18/10/2026    22/11/2026'
+  const lue = (espece_code: string, date_ouverture: string, date_fermeture: string) => periode({ citation: CITATION, page: 1, espece_code, date_ouverture, date_fermeture })
+  it('période du cerf prise sur la ligne du lièvre → date_ecartee (non levable)', () => {
+    const r = verifierPreuves(lecture([lue('cerf', '2026-10-18', '2026-11-22')]), [page(1, TABLEAU)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee', 'date_ecartee'])
+    expect(r.details[0]).toBe("période 1 (cerf) : date d'ouverture 2026-10-18 écartée (autre espèce entre l'espèce et la date : lievre)")
+    expect(r.echecs.every(e => !levableSurImage(e))).toBe(true)
+  })
+  it('chaque espèce avec les dates de sa ligne → ok', () => {
+    expect(verifierPreuves(lecture([lue('cerf', '2026-06-01', '2026-09-30'), lue('lievre', '2026-10-18', '2026-11-22')]), [page(1, TABLEAU)], SAISON))
+      .toMatchObject({ ok: true, echecs: [] })
+  })
+  it('prose à deux dates pour plusieurs espèces : inchangée', () => {
+    const c = 'La chasse du lièvre, de la perdrix et du faisan est ouverte du 27 septembre 2026 au 28 février 2027'
+    for (const espece_code of ['lievre', 'perdrix', 'faisan']) {
+      expect(verifierPreuves(lecture([periode({ citation: c, page: 1, espece_code, date_ouverture: '2026-09-27', date_fermeture: '2027-02-28' })]), [page(1, `Article 2 : ${c}.`)], SAISON))
+        .toMatchObject({ ok: true, echecs: [] })
+    }
+  })
+})
+
+// R61 (4) : tableau extrait colonne par colonne (noms d'espèces à la suite, sans date entre eux) → rattachement impossible.
+describe('verifierPreuves — tableau lu en colonnes (R61)', () => {
+  const COLONNES = 'Espèces Ouverture Fermeture\nCerf\nChevreuil\nLièvre\n01/06/2026 01/06/2026 18/10/2026\n30/09/2026 28/02/2027 22/11/2026'
+  const DETAIL = 'tableau lu en colonnes : rattachement espèce/date impossible'
+  it('preuve composée sur une telle page → refus tableau_colonnes, non levable', () => {
+    const citation = '01/06/2026 01/06/2026 18/10/2026'
+    const p = periode({ citation, page: 1, espece_code: 'cerf', date_ouverture: '2026-06-01', date_fermeture: '2026-09-30',
+      preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits: ['Cerf', '30/09/2026'] } })
+    const r = verifierPreuves(lecture([p]), [page(1, COLONNES)], SAISON)
+    expect(r.echecs).toEqual([{ page: 1, nature: 'tableau_colonnes', detail: `période 1 (cerf) : ${DETAIL}` }])
+    expect(levableSurImage(r.echecs[0])).toBe(false)
+  })
+  it('citation à plusieurs lignes sur une telle page → même refus', () => {
+    const citation = 'Cerf 01/06/2026 30/09/2026 Lièvre 18/10/2026 22/11/2026'
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'cerf', date_ouverture: '2026-06-01', date_fermeture: '2026-09-30' })]),
+      [page(1, `${COLONNES}\nArticle 6 : ${citation}.`)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['tableau_colonnes'])
+  })
+  it('citation qui recopie elle-même les noms en colonne (deux dates seulement) → même refus', () => {
+    const citation = 'Cerf\nChevreuil\nLièvre\n01/06/2026 01/06/2026 18/10/2026'
+    const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'cerf', date_ouverture: '2026-06-01', date_fermeture: '2026-10-18' })]), [page(1, COLONNES)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['tableau_colonnes'])
+  })
+  it('liste en prose (« lièvre, perdrix et faisan ») ou espèce qualifiée (« Cerf élaphe ») : pas un tableau en colonnes', () => {
+    const texte = 'Article 2 : lièvre, perdrix et faisan.\nCerf élaphe\n                   1er septembre 2026   28 février 2027'
+    const p = periode({ citation: '1er septembre 2026   28 février 2027', page: 1, espece_code: 'cerf', date_ouverture: '2026-09-01', date_fermeture: '2027-02-28',
+      preuve: { article: '3', citation: '1er septembre 2026   28 février 2027', page: 1, annee_deduite: false, extraits: ['Cerf élaphe'] } })
+    expect(verifierPreuves(lecture([p]), [page(1, texte)], SAISON)).toMatchObject({ ok: true, echecs: [] })
+  })
+  it('arrêtés réels (54, 69) : aucune page vue comme tableau en colonnes', () => {
+    for (const f of ['54-ap.texte.json', '69-fdc.texte.json']) {
+      const { pages } = JSON.parse(readFileSync(new URL(`./__fixtures__/${f}`, import.meta.url), 'utf8')) as { pages: PageTexte[] }
+      expect(pages.filter(p => tableauEnColonnes(normaliser(p.texte))).map(p => `${f} p${p.n}`)).toEqual([])
+    }
+  })
+  it('citation simple (une espèce, deux dates) sur une telle page : non concernée', () => {
+    const texte = `${COLONNES}\nArticle 5 : le renard est chassé du 1er juin 2026 au 31 mars 2027.`
+    const r = verifierPreuves(lecture([periode({ citation: 'le renard est chassé du 1er juin 2026 au 31 mars 2027', page: 1, espece_code: 'renard', date_ouverture: '2026-06-01', date_fermeture: '2027-03-31' })]), [page(1, texte)], SAISON)
+    expect(r.ok).toBe(true)
   })
 })
 
