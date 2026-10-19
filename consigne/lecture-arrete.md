@@ -30,7 +30,7 @@ Tout vient du texte fourni. Une période n'existe que si l'arrêté donne des **
 - **Date d'exclusion** : « hormis du X au Y », « sauf du X au Y », « la chasse est interdite du X au Y » ne sont jamais une ouverture. La période réelle est ce qui reste autour, si le texte le permet ; sinon `notes`.
 - **Espèce hors vocabulaire** (grand tétras, oie, grive, vanneau, chien viverrin…) → aucune ligne, une mention dans `notes`. Biche, faon = `cerf` ; chevrette, brocard = `chevreuil` ; gibier d'eau = `canard` (voir la preuve : ces synonymes ne suffisent pas dans la citation).
 - **Ouverture et fermeture générales** : une espèce qui renvoie à l'ouverture ou à la clôture générale (cellule « Ouverture générale », « de l'ouverture générale au … ») prend les dates générales écrites dans l'arrêté ; la citation est la ligne de l'espèce avec la formulation du renvoi (telle qu'écrite), PAS le passage des dates générales.
-- **Date relative** (« la veille de l'ouverture générale ») : écris la date calculée ; la citation garde la formulation relative.
+- **Date relative** (« la veille de l'ouverture générale ») : écris la date calculée ; la citation garde la formulation relative. Pour « à l'ouverture générale » / « jusqu'à l'ouverture générale » en fin de période, la fermeture est la veille de l'ouverture générale.
 - Les dates de sortie sont au format `AAAA-MM-JJ`.
 
 ## Pièges fréquents

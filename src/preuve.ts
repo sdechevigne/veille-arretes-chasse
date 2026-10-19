@@ -64,27 +64,34 @@ const RENVOIS = {
   cloture: { ensemble: 'clotures', nom: 'clôture générale', defini: 'la clôture générale' },
 } as const
 type TypeRenvoi = keyof typeof RENVOIS
-/** Renvoi aux dates générales vu dans une preuve ; `ecarte` = raison de son refus par la règle de ligne (Ruling R52). */
-interface RenvoiVu { type: TypeRenvoi; relatif: 'veille' | 'lendemain' | null; ecarte?: string }
+/** Renvoi aux dates générales vu dans une preuve ; `ecarte` = raison de son refus par la règle de ligne (Ruling R52).
+ *  `relatif: 'jusqua'` = « (jusqu')à l'ouverture générale », fin de période (Ruling R54). */
+interface RenvoiVu { type: TypeRenvoi; relatif: 'veille' | 'lendemain' | 'jusqua' | null; ecarte?: string }
 
 // « ouverture / clôture / fermeture générale », éventuellement précédée de « la veille de » / « le lendemain de », qui doit
-// lui être collé (Ruling R48). Global : à n'employer qu'avec matchAll (`.test` garderait son `lastIndex`).
-const RE_RENVOI = /\b(?:(veille|lendemain) de (?:la |l' ?|l )?)?(ouverture|cloture|fermeture) generale\b/g
+// lui être collé (Ruling R48) ; ou « à / jusqu'à / jusqu'au jour de l'ouverture générale » (Ruling R54), collé lui aussi.
+// Global : à n'employer qu'avec matchAll (`.test` garderait son `lastIndex`).
+const RE_RENVOI = /\b(?:(veille|lendemain) de (?:la |l' ?|l )?)?(ouverture|cloture|fermeture) generale\b|\b(?:jusqu' ?au jour de |(?:jusqu' ?|jusqu )?a )(?:l' ?|l )ouverture generale\b/g
 
 /** Renvois d'un texte normalisé, situés dans ce texte. */
 const renvoisDe = (t: string): (RenvoiVu & Occurrence)[] => [...t.matchAll(RE_RENVOI)].map(m => ({
-  type: m[2] === 'ouverture' ? 'ouverture' : 'cloture', relatif: (m[1] ?? null) as RenvoiVu['relatif'],
+  type: m[2] === undefined || m[2] === 'ouverture' ? 'ouverture' : 'cloture', relatif: (m[2] === undefined ? 'jusqua' : m[1] ?? null) as RenvoiVu['relatif'],
   debut: m.index, fin: m.index + m[0].length,
 }))
 
 /** Renvoi de la preuve qui justifierait une date absente, ou null : une date d'ouverture renvoie à l'ouverture générale, une
- *  date de fermeture à la clôture générale ; « la veille de » / « le lendemain de » l'une ou l'autre décale d'un jour.
+ *  date de fermeture à la clôture générale ; « la veille de » / « le lendemain de » l'une ou l'autre décale d'un jour ;
+ *  « (jusqu')à l'ouverture générale » ne prouve qu'une fermeture, la veille de l'ouverture générale (Ruling R54).
  *  `vus` porte les renvois retenus en tête ; celui qui répond rend sa raison d'écartement s'il en a une (Ruling R52). */
 function renvoi(date: string, ouverture: boolean, vus: RenvoiVu[], generales: DatesGenerales): { nom: string; ecarte?: string } | null {
   const direct = RENVOIS[ouverture ? 'ouverture' : 'cloture']
-  const v = vus.find(x => (x.type === 'ouverture') === ouverture)
+  const v = vus.find(x => x.relatif !== 'jusqua' && (x.type === 'ouverture') === ouverture)
   if (v && generales[direct.ensemble].has(date)) return { nom: direct.nom, ecarte: v.ecarte }
   for (const x of vus) {
+    if (x.relatif === 'jusqua') {
+      if (!ouverture && generales.ouvertures.has(decaler(date, 1))) return { nom: `veille de ${RENVOIS.ouverture.defini}`, ecarte: x.ecarte }
+      continue
+    }
     if (!x.relatif) continue
     const cible = RENVOIS[x.type]
     if (generales[cible.ensemble].has(decaler(date, x.relatif === 'veille' ? 1 : -1))) return { nom: `${x.relatif} de ${cible.defini}`, ecarte: x.ecarte }

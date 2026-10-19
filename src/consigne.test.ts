@@ -57,6 +57,10 @@ describe('chargerConsigne', () => {
     expect(systeme).toMatch(/Si la ligne du tableau contient tout, cite la ligne entière et laisse `extraits: \[\]`/)
   })
 
+  it('« à l’ouverture générale » : la fermeture est la veille de l’ouverture générale (R54)', () => {
+    expect(systeme).toMatch(/« à l'ouverture générale ».*la fermeture est la veille de l'ouverture générale/)
+  })
+
   it('la consigne cite chaque espèce, chaque mode et chaque sous-type', () => {
     for (const mot of [...ESPECES, ...MODES, ...SOUS_TYPES]) expect(systeme).toMatch(new RegExp(`\\b${mot}\\b`))
   })

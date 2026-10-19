@@ -481,10 +481,55 @@ describe('verifierPreuves — garde-fous des renvois (R48)', () => {
     expect(verifierPreuves(lecture([faisan("faisan : de l'ouverture générale au 31 janvier 2027")]), [page(1, FAISAN)], SAISON).ok).toBe(true)
   })
   it('« veille » détachée de l’expression : décalage non appliqué', () => {
-    const texte = "Article 1 : l'ouverture générale est fixée au 13 septembre 2026.\nArticle 4 : le lapin, chassé la veille, reste chassé du 1er août 2026 à l'ouverture générale."
-    const citation = "le lapin, chassé la veille, reste chassé du 1er août 2026 à l'ouverture générale"
+    // Fixture sans « à l'ouverture générale » (Ruling R55) : depuis R54 (c), cette expression vaut à elle seule la veille.
+    const texte = "Article 1 : l'ouverture générale est fixée au 13 septembre 2026.\nArticle 4 : le lapin, chassé la veille, reste chassé du 1er août 2026 et pendant l'ouverture générale."
+    const citation = "le lapin, chassé la veille, reste chassé du 1er août 2026 et pendant l'ouverture générale"
     const r = verifierPreuves(lecture([periode({ citation, page: 1, espece_code: 'lapin', date_ouverture: '2026-08-01', date_fermeture: '2026-09-12' })]), [page(1, texte)], SAISON)
     expect(r.echecs.map(e => e.detail)).toEqual(['période 1 (lapin) : date de fermeture 2026-09-12 absente de la citation'])
+  })
+})
+
+// R54 (c) : « (jusqu')à l'ouverture générale » renvoie la FERMETURE à la veille de l'ouverture générale, jamais l'ouverture.
+describe('verifierPreuves — « à l’ouverture générale » = veille de l’ouverture générale (R54)', () => {
+  const GENERALE = "Article 1 : la période d'ouverture générale de la chasse à tir est fixée du 27 septembre 2026 au 28 février 2027."
+  const cerf = (citation: string, date_ouverture: string, date_fermeture: string) =>
+    periode({ citation, page: 1, espece_code: 'cerf', date_ouverture, date_fermeture })
+  const verifier = (phrase: string, citation: string, ouverture: string, fermeture: string) =>
+    verifierPreuves(lecture([cerf(citation, ouverture, fermeture)]), [page(1, `${GENERALE}\nArticle 3 : ${phrase}`)], SAISON)
+  const CERF = "Cerf : du 1er septembre 2026 à l'ouverture générale"
+  it('« Cerf … du 1er septembre 2026 à l’ouverture générale » : fermeture 2026-09-26 ok, renvoi noté', () => {
+    expect(verifier(`${CERF}, à l'approche ou à l'affût.`, CERF, '2026-09-01', '2026-09-26')).toEqual({ ok: true, details: [], pagesEnEchec: [], echecs: [],
+      notes: ["période 1 (cerf) : date de fermeture 2026-09-26 = veille de l'ouverture générale (renvoi)"] })
+  })
+  it('fermeture 2026-09-27 (jour même) ou 2026-09-25 → date_absente', () => {
+    for (const f of ['2026-09-27', '2026-09-25']) {
+      const r = verifier(`${CERF}.`, CERF, '2026-09-01', f)
+      expect(r.echecs).toEqual([{ page: 1, nature: 'date_absente', detail: `période 1 (cerf) : date de fermeture ${f} absente de la citation` }])
+      expect(r.notes).toEqual([])
+    }
+  })
+  it('la même expression ne prouve pas une ouverture', () => {
+    const r = verifier(`${CERF}.`, CERF, '2026-09-27', '2026-09-26')
+    expect(r.echecs.map(e => e.detail)).toEqual(["période 1 (cerf) : date d'ouverture 2026-09-27 absente de la citation"])
+  })
+  it('« jusqu’à l’ouverture générale » et « jusqu’au jour de l’ouverture générale » : même renvoi', () => {
+    for (const c of ["Cerf : du 1er septembre 2026 jusqu'à l'ouverture générale", 'Cerf : du 1er septembre 2026 jusqu’au jour de l’ouverture générale']) {
+      expect(verifier(`${c}.`, c, '2026-09-01', '2026-09-26')).toMatchObject({ ok: true, echecs: [] })
+    }
+  })
+  it('R48 : preuve à plusieurs dates littérales → pas de renvoi', () => {
+    const c = "Cerf : du 1er septembre 2026 à l'ouverture générale ; en battue du 1er octobre 2026 au 31 janvier 2027"
+    expect(verifier(`${c}.`, c, '2026-09-01', '2026-09-26').echecs.map(e => e.nature)).toEqual(['date_absente'])
+  })
+  it('R52 : expression prise sur la ligne du sanglier → date_ecartee, aucun renvoi', () => {
+    const entete = 'Espèces            Ouverture            Fermeture'
+    const lignes = "Cerf               1er septembre 2026\nSanglier           15 août 2026           à l'ouverture générale"
+    const p = periode({ citation: `${entete}\nCerf`, page: 1, espece_code: 'cerf', date_ouverture: '2026-09-01', date_fermeture: '2026-09-26',
+      preuve: { article: '3', citation: `${entete}\nCerf`, page: 1, annee_deduite: false, extraits: [lignes] } })
+    const r = verifierPreuves(lecture([p]), [page(1, `${GENERALE}\n${entete}\n${lignes}`)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee'])
+    expect(r.details).toEqual(["période 1 (cerf) : date de fermeture 2026-09-26 écartée (autre espèce entre l'espèce et le renvoi : sanglier)"])
+    expect(r.notes).toEqual([])
   })
 })
 
