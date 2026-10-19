@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { dateIso, datesDe, datesPositionnees, premierePlage, compterDatesLarges } from './dates.ts'
+import { normaliser } from './texte.ts'
 describe('dateIso', () => {
   it('lit les formes françaises courantes', () => {
     expect(dateIso('1er juin 2026', '2026-2027')).toEqual({ iso: '2026-06-01', anneeDeduite: false })
@@ -107,6 +108,18 @@ describe('datesDe — « dernier jour de <mois> » (R45)', () => {
       { iso: '2027-06-01', debut: 3, fin: 11 },
       { iso: '2027-02-28', debut: 15, fin: 38 },
     ])
+  })
+  it('« avant-dernier jour » n’est PAS le dernier jour : aucune date (tiret, espace, tirets typographiques, texte normalisé)', () => {
+    for (const t of ["jusqu'à l'avant-dernier jour de février", "jusqu'à l'avant dernier jour de février", 'jusqu’à l’avant‑dernier jour de février',
+      'jusqu’à l’avant–dernier jour de février', 'jusqu\'a l\'avant-dernier jour de fevrier 2027', 'Avant-Dernier jour de février', 'sous-dernier jour de février']) {
+      expect(datesPositionnees(t, '2026-2027')).toEqual([])
+      expect(datesPositionnees(normaliser(t), '2026-2027')).toEqual([])
+    }
+    expect(compterDatesLarges("l'avant-dernier jour de février")).toBe(0)
+    expect(datesDe("du 1er septembre à l'avant-dernier jour de février puis jusqu'au dernier jour de mars", '2026-2027')).toEqual(['2026-09-01', '2027-03-31'])
+  })
+  it('« du 1er au dernier jour de février » : seule la fin est lue (le jour nu est perdu : faux négatif sûr)', () => {
+    expect(datesDe('du 1er au dernier jour de février', '2026-2027')).toEqual(['2027-02-28'])
   })
   it('compterDatesLarges la compte comme une date', () => {
     expect(compterDatesLarges('du 1er septembre au dernier jour de février')).toBe(2)

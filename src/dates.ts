@@ -3,8 +3,9 @@ import { MOIS } from './lexique.ts'
 
 // L'ordre de `MOIS` (lexique.ts) est celui du calendrier : indice + 1 = numéro du mois (couvert par dates.test.ts).
 const MOIS_RE = MOIS.split('|').map(m => new RegExp(`^(?:${m})$`, 'i'))
-// « dernier jour de février [2027] » : le jour dépend du mois et de l'année, calculé dans dateIso.
-const DERNIER_JOUR = String.raw`dernier\s+jour\s+(?:de\s+|d['’]\s*)`
+// « dernier jour de février [2027] » : le jour dépend du mois et de l'année, calculé dans dateIso. Jamais « avant-dernier jour »
+// (avec tiret, tiret typographique ou espace) ni « sous-dernier » : `\b` seul s'arrêterait entre le tiret et « dernier ».
+const DERNIER_JOUR = String.raw`(?<![-\u2010-\u2015])(?<!avant[\s\u2010-\u2015-]+)dernier\s+jour\s+(?:de\s+|d['’]\s*)`
 const FRAGMENT = new RegExp(String.raw`^(\d{1,2})(?:er|"|’|')?\s+(${MOIS})(?:\s+(20\d\d))?$|^(\d{2})[/-](\d{2})[/-](20\d\d)$|^${DERNIER_JOUR}(${MOIS})(?:\s+(20\d\d))?$`, 'i')
 const RE_DATES = new RegExp(String.raw`\b\d{1,2}(?:er|"|’|')?\s+(?:${MOIS})\b(?:\s+20\d\d\b)?|\b\d{2}[/-]\d{2}[/-]20\d\d\b|\b${DERNIER_JOUR}(?:${MOIS})\b(?:\s+20\d\d\b)?`, 'gi')
 

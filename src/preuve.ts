@@ -102,11 +102,11 @@ interface RenvoiSitue extends Occurrence { type: TypeRenvoi; relatif: RenvoiVu['
 const autreEspece = (t: string, espece: string): string | undefined =>
   Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
 
-/** Preuve composée (Rulings R47, R50, R51, R52) : dans un tableau, la ligne d'une espèce commence à son nom. Un extrait qui apporte
+/** Preuve composée (Rulings R47, R50, R51, R52, R53) : dans un tableau, la ligne d'une espèce commence à son nom. Un extrait qui apporte
  *  l'espèce absente de la citation doit la précéder sans autre espèce intercalée ; puis, sur l'occurrence de l'espèce la plus proche
  *  avant eux (`occ`), ne comptent que les dates ET les renvois situés après `occ` sans autre espèce entre `occ` et eux. Rend les
  *  extraits à écarter (avec leur raison), les dates retenues, les dates écartées et les renvois (retenus d'abord, puis écartés avec
- *  leur raison) ; sans occurrence de l'espèce, rien n'est filtré (l'espèce manque déjà). Positions sur la page normalisée. */
+ *  leur raison ; un renvoi n'est lu que contigu dans un seul fragment, jamais recollé entre deux, R53) ; sans occurrence de l'espèce, rien n'est filtré (l'espèce manque déjà). Positions sur la page normalisée. */
 function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], motif: RegExp, espece: string, saison: string)
   : { ambigus: Map<Fragment, string>; dates: string[]; ecartees: Map<string, string>; renvois: RenvoiVu[] } {
   const tranche = (f: Fragment) => page.slice(f.debut, f.fin)
