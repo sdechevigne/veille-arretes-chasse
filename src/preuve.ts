@@ -1,7 +1,7 @@
 // Contrôle C1 : chaque période (ou suppression) lue par Claude doit être appuyée par une citation exacte du texte,
 // portant l'espèce et les deux dates, complétée au besoin d'extraits voisins de la même page (arrêtés en tableau).
 // Une date absente de la preuve n'est admise que par un renvoi aux dates générales écrites dans l'arrêté. Module pur.
-import { datesDe, premierePlage } from './dates.ts'
+import { datesDe, datesPositionnees, premierePlage } from './dates.ts'
 import { ESPECES_RECHERCHE } from './lexique.ts'
 import { normaliser, trouverCitation } from './texte.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
@@ -77,36 +77,59 @@ function renvoi(date: string, ouverture: boolean, preuve: string, generales: Dat
   return null
 }
 
-/** Fragment d'une preuve composée, situé sur la page normalisée : occurrence de l'espèce (s'il la porte) et présence de dates. */
-interface Fragment { texte: string; debut: number; fin: number; dates: boolean; espece: { debut: number; fin: number } | null }
+/** Fragment d'une preuve composée, situé sur la page normalisée. */
+interface Fragment { texte: string; debut: number; fin: number }
+interface Occurrence { debut: number; fin: number }
+interface DateSituee extends Occurrence { iso: string; fragment: Fragment }
 
 const autreEspece = (t: string, espece: string): string | undefined =>
   Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
+const RE_RENVOI = new RegExp(`${RE_OUVERTURE_GENERALE.source}|${RE_CLOTURE_GENERALE.source}`)
 
-/** Extraits d'une preuve composée à écarter, avec leur raison (Rulings R47, R50) : dans un tableau, la ligne d'une espèce commence à
- *  son nom. L'occurrence de l'espèce doit précéder tout fragment daté, sans autre espèce jusqu'à la fin de ce fragment ; et un
- *  extrait qui apporte l'espèce absente de la citation doit précéder celle-ci de la même façon. Sinon l'espèce ou les dates
- *  viennent d'une ligne voisine. Positions sur la page normalisée. */
-function extraitsAmbigus(page: string, citation: Fragment, extraits: Fragment[], espece: string): Map<Fragment, string> {
+/** Preuve composée (Rulings R47, R50) : dans un tableau, la ligne d'une espèce commence à son nom. Un extrait qui apporte l'espèce
+ *  absente de la citation doit la précéder sans autre espèce intercalée ; puis, sur l'occurrence de l'espèce la plus proche avant
+ *  les dates (`occ`), seule compte une date située après `occ` sans autre espèce entre `occ` et elle. Rend les extraits à écarter
+ *  (avec leur raison) et les dates retenues ; sans occurrence de l'espèce, les dates ne sont pas filtrées (l'espèce manque déjà).
+ *  Positions sur la page normalisée. */
+function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], motif: RegExp, espece: string, saison: string)
+  : { ambigus: Map<Fragment, string>; dates: string[] } {
+  const tranche = (f: Fragment) => page.slice(f.debut, f.fin)
+  const especesDe = (f: Fragment): Occurrence[] => [...tranche(f).matchAll(new RegExp(motif.source, `${motif.flags.replace('g', '')}g`))]
+    .map(m => ({ debut: f.debut + m.index, fin: f.debut + m.index + m[0].length }))
+  const datesDeFragment = (f: Fragment): DateSituee[] => datesPositionnees(tranche(f), saison)
+    .map(d => ({ iso: d.iso, debut: f.debut + d.debut, fin: f.debut + d.fin, fragment: f }))
   const ambigus = new Map<Fragment, string>()
-  let occ = citation.espece
-  if (!occ) {
+  if (!especesDe(citation).length) {
     // L'espèce vient d'un extrait : il doit précéder la citation (jusqu'à sa fin si elle porte des dates, son début sinon).
-    for (const e of extraits.filter(x => x.espece)) {
-      if (e.espece.debut > citation.debut) { ambigus.set(e, 'après la citation'); continue }
-      const code = autreEspece(page.slice(e.espece.fin, citation.dates ? citation.fin : citation.debut), espece)
+    const borne = datesDeFragment(citation).length ? citation.fin : citation.debut
+    for (const e of extraits) {
+      const [s] = especesDe(e)
+      if (!s) continue
+      if (s.debut > citation.debut) { ambigus.set(e, 'après la citation'); continue }
+      const code = autreEspece(page.slice(s.fin, borne), espece)
       if (code) ambigus.set(e, `séparé de la citation par une autre espèce (${code})`)
-      else occ ??= e.espece
     }
   }
-  if (!occ) return ambigus
-  // Extraits datés qui ne portent pas eux-mêmes l'espèce : après son occurrence, sans autre espèce intercalée.
-  for (const e of extraits.filter(x => x.dates && !x.espece && !ambigus.has(x))) {
-    if (e.debut < occ.debut) { ambigus.set(e, "placé avant l'espèce"); continue }
-    const code = autreEspece(page.slice(occ.fin, e.fin), espece)
-    if (code) ambigus.set(e, `séparé de l'espèce par une autre espèce (${code})`)
+  const gardes = [citation, ...extraits.filter(e => !ambigus.has(e))]
+  const dates = gardes.flatMap(datesDeFragment)
+  const uniques = (ds: DateSituee[]) => [...new Map(ds.map(d => [d.debut, d.iso])).values()]
+  const occurrences = gardes.flatMap(especesDe)
+  if (!occurrences.length) return { ambigus, dates: uniques(dates) }
+  const valide = (s: Occurrence, d: DateSituee) => d.debut >= s.fin && !autreEspece(page.slice(s.fin, d.fin), espece)
+  // `occ` : l'occurrence qui valide le plus de dates ; à égalité, la plus proche avant elles (la plus tardive).
+  const occ = occurrences.reduce((m, s) => {
+    const n = dates.filter(d => valide(s, d)).length, nm = dates.filter(d => valide(m, d)).length
+    return n > nm || (n === nm && s.debut > m.debut) ? s : m
+  })
+  // Extrait présent pour ses seules dates, toutes écartées : ambigu (ni l'espèce retenue, ni un renvoi aux dates générales).
+  for (const e of gardes.slice(1)) {
+    const siennes = dates.filter(d => d.fragment === e)
+    if (!siennes.length || siennes.some(d => valide(occ, d))) continue
+    if ((occ.debut >= e.debut && occ.fin <= e.fin) || RE_RENVOI.test(tranche(e))) continue
+    const d = siennes[0]
+    ambigus.set(e, d.debut < occ.fin ? "placé avant l'espèce" : `séparé de l'espèce par une autre espèce (${autreEspece(page.slice(occ.fin, d.fin), espece)})`)
   }
-  return ambigus
+  return { ambigus, dates: uniques(dates.filter(d => valide(occ, d))) }
 }
 
 /** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
@@ -123,9 +146,10 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
   const echecs: EchecPreuve[] = [], notes: string[] = []
   let generales: DatesGenerales | undefined
 
-  // Vérifie page, citation, extraits et espèce ; renvoie le texte de la preuve (citation et extraits retrouvés près d'elle)
+  // Vérifie page, citation, extraits et espèce ; renvoie le texte de la preuve (citation et extraits retenus) et ses dates
   // si la citation est retrouvée (pour poursuivre sur les dates), null sinon.
-  const verifierCitation = (etiquette: string, espece: string, sousType: string | null, citation: string, numPage: number, extraits: string[]): string | null => {
+  const verifierCitation = (etiquette: string, espece: string, sousType: string | null, citation: string, numPage: number, extraits: string[])
+    : { texte: string; dates: string[] } | null => {
     const prefixe = `${etiquette} (${espece}) : `
     const echouer = (nature: NatureEchec, detail: string, score?: number) => { echecs.push({ page: numPage, detail, nature, ...(score === undefined ? {} : { score }) }) }
     const page = pages.find(p => p.n === numPage)
@@ -139,11 +163,7 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     }
     // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien.
     const motif = motifEspece(espece, sousType)
-    const pageNorm = normaliser(page.texte)
-    const fragment = (texte: string, debut: number): Fragment => {
-      const fin = debut + normaliser(texte).length, contenu = pageNorm.slice(debut, fin), m = motif?.exec(contenu)
-      return { texte, debut, fin, dates: datesDe(contenu, saison).length > 0, espece: m ? { debut: debut + m.index, fin: debut + m.index + m[0].length } : null }
-    }
+    const fragment = (texte: string, debut: number): Fragment => ({ texte, debut, fin: debut + normaliser(texte).length })
     const retenus: Fragment[] = []
     for (const extrait of extraits) {
       const e = trouverCitation(extrait, page.texte)
@@ -152,24 +172,25 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       if (ecart > DISTANCE_MAX_FRAGMENTS) { echouer('extraits_eloignes', `${prefixe}extrait « ${extrait} » trop éloigné de la citation (${ecart} caractères)`); continue }
       retenus.push(fragment(extrait, e.debut))
     }
-    // Preuve composée : l'espèce doit ouvrir la ligne de ses dates (R47, R50) ; une preuve sans extrait reste inchangée.
+    // Preuve composée : l'espèce ouvre la ligne de ses dates (R47, R50) ; une preuve sans extrait reste inchangée.
     const cite = fragment(citation, trouvee.debut)
-    const ambigus = retenus.length ? extraitsAmbigus(pageNorm, cite, retenus, espece) : new Map<Fragment, string>()
+    const composee = retenus.length && motif ? preuveComposee(normaliser(page.texte), cite, retenus, motif, espece, saison) : null
+    const ambigus = composee?.ambigus ?? new Map<Fragment, string>()
     for (const [e, raison] of ambigus) echouer('extrait_ambigu', `${prefixe}extrait « ${e.texte} » ${raison}`)
     const preuve = [cite, ...retenus.filter(e => !ambigus.has(e))]
     const texte = preuve.map(f => f.texte).join(' ')
     if (!motif) echouer('espece_sans_motif', `${prefixe}espèce sans motif de recherche`)
     else if (!motif.test(texte)) echouer('espece_absente', `${prefixe}espèce absente de la citation`)
     else if (!motif.test(citation)) notes.push(`${prefixe}espèce prouvée par extrait « ${preuve.find(f => motif.test(f.texte))!.texte} »`)
-    return texte
+    return { texte, dates: composee?.dates ?? datesDe(normaliser(texte), saison) }
   }
 
   lecture.periodes.forEach((p, i) => {
     const { citation, page, annee_deduite, extraits } = p.preuve
-    const texte = verifierCitation(`période ${i + 1}`, p.espece_code, p.sous_type, citation, page, extraits)
-    if (texte === null) return
-    const preuve = normaliser(texte)
-    const vues = datesDe(preuve, saison).map(d => (annee_deduite ? d.slice(5) : d))
+    const verifiee = verifierCitation(`période ${i + 1}`, p.espece_code, p.sous_type, citation, page, extraits)
+    if (verifiee === null) return
+    const preuve = normaliser(verifiee.texte)
+    const vues = verifiee.dates.map(d => (annee_deduite ? d.slice(5) : d))
     const prefixe = `période ${i + 1} (${p.espece_code}) : `
     for (const [libelle, date, ouverture] of [["d'ouverture", p.date_ouverture, true], ['de fermeture', p.date_fermeture, false]] as const) {
       if (vues.includes(annee_deduite ? date.slice(5) : date)) continue

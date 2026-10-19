@@ -239,6 +239,24 @@ describe('verifierPreuves — preuve composée : l’espèce ouvre la ligne de s
     expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente', 'date_absente'])
     expect(r.details[0]).toBe("période 1 (chevreuil) : extrait « 1er juin 2026        28 février 2027 » placé avant l'espèce")
   })
+  it('extrait daté qui porte lui-même l’espèce : les dates de la ligne suivante (sanglier) ne comptent pas', () => {
+    const texte = 'Espèces            Ouverture            Fermeture\nChevreuil          1er juin 2026          Clôture générale\nSanglier           15 août 2026           31 mars 2027'
+    const r = verifierPreuves(lecture([chevreuil('Espèces            Ouverture            Fermeture\nChevreuil',
+      ['Chevreuil          1er juin 2026          Clôture générale\nSanglier           15 août 2026           31 mars 2027'])]), [page(1, texte)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente', 'date_absente'])
+  })
+  it('dates situées avant l’espèce (extrait « dates / Chevreuil » placé avant la citation) : ne comptent pas', () => {
+    const texte = '15 août 2026           31 mars 2027\nChevreuil\n1er juin 2026          Clôture générale'
+    const r = verifierPreuves(lecture([chevreuil('1er juin 2026          Clôture générale', ['15 août 2026           31 mars 2027\nChevreuil'])]), [page(1, texte)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente', 'date_absente'])
+  })
+  it('citation avec l’espèce et ses dates + extrait portant le renvoi → ok', () => {
+    const texte = "Article 1 : la clôture générale est fixée au 28 février 2027.\nArticle 3 :\nChevreuil          1er juin 2026\n                   jusqu'à la clôture générale"
+    const r = verifierPreuves(lecture([chevreuil('Chevreuil          1er juin 2026', ["jusqu'à la clôture générale"], { date_ouverture: '2026-06-01', date_fermeture: '2027-02-28' })]), [page(1, texte)], SAISON)
+    expect(r).toMatchObject({ ok: true, echecs: [], notes: ['période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)'] })
+  })
   it('sans extrait, inchangé : un article qui cite plusieurs espèces pour les mêmes dates reste valable', () => {
     const c = 'La chasse du lièvre, de la perdrix et du faisan est ouverte du 27 septembre 2026 au 28 février 2027'
     const r = verifierPreuves(lecture([periode({ citation: c, page: 1, espece_code: 'lievre', date_ouverture: '2026-09-27', date_fermeture: '2027-02-28' })]), [page(1, `Article 2 : ${c}.`)], SAISON)
