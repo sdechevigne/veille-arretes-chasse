@@ -184,6 +184,7 @@ describe('creerLecteurOpencode — relance corrective unique (R45)', () => {
     const debut = 'Ta réponse précédente ne respecte pas le schéma JSON demandé : '
     const erreurs = texte.slice(debut.length, texte.indexOf(' Renvoie uniquement'))
     expect(erreurs.length).toBeGreaterThan(900)
+    // 1 000 caractères d'erreurs + le point final inséré juste avant « Renvoie » : 1 001 au plus.
     expect(erreurs.length).toBeLessThanOrEqual(1001)
   })
   it('MessageOutputLengthError → schema SANS relance', async () => {
@@ -207,19 +208,22 @@ describe('creerLecteurOpencode — relance corrective unique (R45)', () => {
     expect(await lecteur(f).lire(REQ)).toMatchObject({ ok: false, erreur: 'quota' })
     expect(messages(appels)).toHaveLength(2)
   })
-  it('délai : la relance partage l’échéance restante ; un dépassement donne timeout', async () => {
-    const attente = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
-    let signalRelance: AbortSignal | undefined
+  it('délai : les deux envois partagent le MÊME signal (échéance restante, pas un 2e délai plein) ; dépassement → timeout', async () => {
+    // Pas d'horloge : AbortSignal.timeout est une minuterie interne de Node, hors de portée de vi.useFakeTimers().
+    // Un 2e délai plein donnerait un 2e signal distinct ; l'échéance restante exige l'objet signal identique.
+    const signaux: AbortSignal[] = []
+    let annuleALaRelance: boolean | undefined
     const { f, appels } = fauxFetch(enchaine(
-      async () => { await attente(60); return message('{"b": 1}') },
-      (init) => { signalRelance = init.signal ?? undefined; return new Promise<Response>(() => {}) },
+      (init) => { signaux.push(init.signal!); return message('{"b": 1}') },
+      (init) => { signaux.push(init.signal!); annuleALaRelance = init.signal!.aborted; return new Promise<Response>(() => {}) },
     ))
-    const debut = Date.now()
-    const r = await lecteur(f).lire({ ...REQ, delaiMs: 100 })
+    const r = await lecteur(f).lire({ ...REQ, delaiMs: 30 })
     expect(r).toMatchObject({ ok: false, erreur: 'timeout' })
-    expect(Date.now() - debut).toBeLessThan(180) // 100 ms au total, pas 60 + 100
     expect(messages(appels)).toHaveLength(2)
-    expect(signalRelance?.aborted).toBe(true)
+    expect(signaux).toHaveLength(2)
+    expect(signaux[1]).toBe(signaux[0])
+    expect(annuleALaRelance).toBe(false) // la relance part avant l'échéance...
+    expect(signaux[1].aborted).toBe(true) // ...et c'est ce même signal qui l'interrompt
     expect(appels.at(-1)).toMatchObject({ init: { method: 'DELETE' } })
   })
 })
