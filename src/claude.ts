@@ -4,22 +4,13 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import Ajv2020 from 'ajv/dist/2020.js'
-import type { ValidateFunction } from 'ajv/dist/2020.js'
 import { expurger } from './http.ts'
+import { DELAI_LECTURE_MS, validerSortie } from './lecteur.ts'
+import type { Lecteur, ReponseLecture, RequeteLecture } from './lecteur.ts'
 import type { LectureClaude } from './types.ts'
-
-export interface RequeteLecture { modele: 'sonnet' | 'opus'; systeme: string; schema: object; texte: string; images?: { page: number; png: Buffer }[]; delaiMs?: number }
-export interface UsageClaude { input: number; output: number; cache_creation: number; cache_read: number }
-export type ReponseLecture =
-  | { ok: true; sortie: LectureClaude; usage: UsageClaude; modele: string }
-  | { ok: false; erreur: 'quota' | 'schema' | 'timeout' | 'cli'; message: string }
-export interface Lecteur { lire(req: RequeteLecture): Promise<ReponseLecture> }
 
 // Distinct de `Exec` de http.ts (curl) : ici stdin, environnement et délai.
 export type ExecClaude = (args: string[], stdin: string, env: Record<string, string>, delaiMs: number) => Promise<{ code: number; stdout: string; stderr: string }>
-
-export const DELAI_LECTURE_MS = 240_000
 
 export class DelaiDepasse extends Error {
   constructor(delaiMs: number) { super(`claude : délai dépassé (${delaiMs} ms)`); this.name = 'DelaiDepasse' }
@@ -37,13 +28,6 @@ export const execClaude: ExecClaude = (args, stdin, env, delaiMs) => new Promise
   p.stdin.on('error', () => { /* le processus a pu se terminer avant la fin de l'écriture : « close » rapporte le résultat */ })
   p.stdin.end(stdin)
 })
-
-const ajv = new Ajv2020({ allErrors: true, strict: true })
-const validateurs = new WeakMap<object, ValidateFunction>()
-function validateur(schema: object): ValidateFunction {
-  let v = validateurs.get(schema); if (!v) { v = ajv.compile(schema); validateurs.set(schema, v) }
-  return v
-}
 
 const estQuota = (t: string) => /rate limit|429|usage limit/i.test(t)
 const COURT = 500
@@ -109,8 +93,8 @@ export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude,
         if (!res) return echec('cli', 'aucune ligne « result » dans la sortie de la CLI')
         const sortie = res.structured_output
         if (sortie === undefined || sortie === null) return echec('schema', 'structured_output absent')
-        const valide = validateur(req.schema)
-        if (!valide(sortie)) return echec('schema', ajv.errorsText(valide.errors, { separator: ' ; ', dataVar: 'sortie' }))
+        const invalide = validerSortie(req.schema, sortie)
+        if (invalide) return echec('schema', invalide)
         const u = res.usage ?? {}
         return { ok: true, sortie: sortie as LectureClaude, modele: typeof res.model === 'string' ? res.model : req.modele,
           usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cache_creation: u.cache_creation_input_tokens ?? 0, cache_read: u.cache_read_input_tokens ?? 0 } }
@@ -119,10 +103,4 @@ export function creerLecteurClaude(token: string, exec: ExecClaude = execClaude,
       } finally { if (dossier) rmSync(dossier, { recursive: true, force: true }) }
     },
   }
-}
-
-// Double en mémoire pour les tests : rend les réponses dans l'ordre et mémorise les requêtes reçues.
-export function creerLecteurMemoire(reponses: ReponseLecture[]): Lecteur & { requetes: RequeteLecture[] } {
-  const file = [...reponses]; const requetes: RequeteLecture[] = []
-  return { requetes, async lire(req) { requetes.push(req); const r = file.shift(); if (!r) throw new Error('lecteur mémoire : plus de réponse prévue'); return r } }
 }

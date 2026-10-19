@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { chargerConsigne } from './consigne.ts'
-import { creerLecteurClaude, creerLecteurMemoire, DelaiDepasse } from './claude.ts'
-import type { ExecClaude, ReponseLecture, RequeteLecture } from './claude.ts'
+import { creerLecteurClaude, DelaiDepasse } from './claude.ts'
+import { creerLecteurMemoire } from './lecteur.ts'
+import type { ExecClaude } from './claude.ts'
+import type { ReponseLecture, RequeteLecture } from './lecteur.ts'
 import type { LectureClaude } from './types.ts'
 
 const JETON = 'sk-ant-oat-FAUX-0123456789'

@@ -1,5 +1,5 @@
 // Bilan hebdomadaire : synthèse des 7 derniers jours, en comptes uniquement (le fichier est commité dans un dépôt public).
-import type { UsageClaude } from './claude.ts'
+import type { UsageClaude } from './lecteur.ts'
 
 export interface EntreeBilan {
   maintenant: Date

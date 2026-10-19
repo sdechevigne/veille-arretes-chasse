@@ -4,7 +4,7 @@
 import type { Archive } from './r2.ts'
 import type { DocumentEnBase } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
-import type { ReponseLecture, RequeteLecture } from './claude.ts'
+import type { ReponseLecture, RequeteLecture } from './lecteur.ts'
 import { levableSurImage, verifierPreuves } from './preuve.ts'
 import { comparerLectures } from './consolidation.ts'
 import type { LectureClaude, PageTexte } from './types.ts'

@@ -3,7 +3,7 @@
 import type { Archive } from './r2.ts'
 import { ERREUR_MAX, PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase, type VersionPubliee } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
-import type { Lecteur, RequeteLecture, UsageClaude } from './claude.ts'
+import type { Lecteur, RequeteLecture, UsageClaude } from './lecteur.ts'
 import { decouperArticles } from './articles.ts'
 import { construireDossier } from './dossier.ts'
 import { comparerProjetSigne } from './projet.ts'
