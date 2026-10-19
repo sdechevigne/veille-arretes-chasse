@@ -324,15 +324,29 @@ describe('lireAvecClaude', () => {
     expect(p.payload.periodes.find(x => x.espece_code === 'sanglier')?.restriction_dates).toBeNull()
   })
 
-  it('image d’une page scannée absente de R2 : C1 rouge avec le détail, aucune lecture sur image lancée', async () => {
+  // Image absente (pas encore produite par images-pages) : aucune décision, le document reste à lire et sera repris au passage
+  // suivant ; ce n'est ni une erreur (aucune tentative comptée) ni une proposition.
+  it('image d’une page scannée absente de R2 : aucune proposition, document laissé a_lire, compté en attente d’images', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
-    const m = await monter([{ sources: ['ocr'], sansImages: true }], [ok(s)])
-    await m.lancer()
-    expect(m.lecteur.requetes).toHaveLength(1); expect(m.images).toEqual([])
-    const p = m.depot.etat.propositions[0]
-    expect(p.c1.ok).toBe(false)
-    expect(p.c1.details).toContain('image de la page 1 absente (à produire par images-pages)')
-    expect(p.lecture).toMatchObject({ double_lecture: false, lectures_image: 0 })
+    const m = await monter([{ sources: ['ocr'], sansImages: true }, {}], [ok(s), ok(sortie())])
+    const stats = await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(2); expect(m.images).toEqual([])
+    expect(m.depot.etat.propositions.map(p => p.document_id)).toEqual(['doc-2'])
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
+    expect(stats).toMatchObject({ attenteImages: 1, erreurs: 0, enAttente: 0, publie: 1, traites: 1 })
+    expect(m.journal).toContain('54 en attente d’images : image de la page 1 absente (à produire par images-pages), document laissé à lire')
+  })
+  it('image absente après la relance Opus d’une page native : document laissé a_lire, aucune erreur comptée', async () => {
+    const PAGES = [AP[0], ART1]
+    const P2_OCR = { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }
+    const s = sortie({ periodes: [{ ...P1, preuve: preuve('peut être chassé du 1er juin 2026 au 28 février 2027', 2) }, P2_OCR] })
+    const opus = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', 2) }, P2_OCR] })
+    const m = await monter([{ pages: PAGES, sources: ['ocr', 'native'], sansImages: true }], [ok(s), ok(opus, 'opus')])
+    const stats = await m.lancer()
+    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus'])
+    expect(m.depot.etat.propositions).toEqual([])
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
+    expect(stats).toMatchObject({ attenteImages: 1, erreurs: 0 })
   })
 
   it('pages illisibles signalées par Claude : page OCR relue en image même si C1 est bon ; page native ignorée', async () => {

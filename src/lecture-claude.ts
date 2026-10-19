@@ -9,7 +9,7 @@ import { comparerProjetSigne } from './projet.ts'
 import { validerVocabulaire, type PeriodePayload } from './payload.ts'
 import { saisonsDepuisTexte } from './saison.ts'
 import { consoliderPeriodes, deptDetecte, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
-import { controlerC1, enPanne, panne, type Lu } from './controle-c1.ts'
+import { controlerC1, enPanne, ImageAbsente, panne, type Lu } from './controle-c1.ts'
 import type { PeriodePubliee } from './difference.ts'
 import type { Article, PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
 
@@ -27,6 +27,8 @@ export interface OptionsLectureClaude {
 }
 export interface StatsLectureClaude {
   traites: number; publie: number; publieNote: number; enAttente: number; ignores: number; sansLecture: number; erreurs: number
+  /** Documents laissés a_lire faute d'image de page (ImageAbsente) : ni traités, ni en erreur ; repris au passage suivant. */
+  attenteImages: number
   arretQuota: boolean; arretBudget: boolean; arretPrecoce: boolean
   /** Entrée hors cache, sortie, écriture et lecture du cache (la CLI compte l'entrée en cache à part). */
   tokens: UsageClaude
@@ -48,7 +50,7 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
   // Journal défaillant : ne doit jamais faire échouer ni re-marquer un document (la trace est un confort, pas un état).
   const log = (l: string) => { try { deps.log?.(l) } catch { /* journal indisponible */ } }
   const now = deps.now ?? (() => new Date())
-  const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, arretQuota: false, arretBudget: false, arretPrecoce: false, tokens: { input: 0, output: 0, cache_creation: 0, cache_read: 0 }, decisions: [] }
+  const stats: StatsLectureClaude = { traites: 0, publie: 0, publieNote: 0, enAttente: 0, ignores: 0, sansLecture: 0, erreurs: 0, attenteImages: 0, arretQuota: false, arretBudget: false, arretPrecoce: false, tokens: { input: 0, output: 0, cache_creation: 0, cache_read: 0 }, decisions: [] }
   for (const doc of await deps.depot.documentsALire(o.limite, now(), o.departements)) {
     if (o.echeance && now() >= o.echeance) { stats.arretPrecoce = true; log('échéance atteinte : lecture Claude interrompue'); break }
     if (o.budgetTokens !== undefined && totalTokens(stats.tokens) >= o.budgetTokens) {
@@ -59,6 +61,7 @@ export async function lireAvecClaude(deps: DepsLectureClaude, o: OptionsLectureC
       r = await lireDocument(deps, doc, stats, log)
     } catch (e) {
       if (e instanceof QuotaAtteint) { stats.arretQuota = true; log(`quota Claude atteint : passage arrêté (${e.message})`); break }
+      if (e instanceof ImageAbsente) { stats.attenteImages++; log(`${doc.departement} en attente d’images : ${e.message}, document laissé à lire`); continue }
       stats.traites++; stats.erreurs++
       const message = messageErreur((e as Error).message, tentativesLecture(doc.erreur) + 1)
       log(`${doc.departement} erreur : ${message}`)

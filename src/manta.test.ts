@@ -70,6 +70,13 @@ describe('textePropositions — erreurs et arrêt précoce', () => {
   })
 })
 
+describe('textePropositions — attente des images de pages', () => {
+  it('signale les documents laissés à lire faute d’image de page', () => {
+    expect(textePropositions({ enAttente: 0, publie: 1, publieNote: 0, attenteImages: 2, arretQuota: false }))
+      .toBe('Veille arrêtés : 0 proposition(s) à vérifier, 1 publiée(s), 2 document(s) en attente des images de pages (repris au prochain passage)')
+  })
+})
+
 describe('textePropositions — budget de tokens', () => {
   it('signale l’arrêt sur budget de tokens et le reste quand il est connu', () => {
     expect(textePropositions({ enAttente: 0, publie: 2, publieNote: 0, arretQuota: false, arretBudget: true, restantsALire: 5 }))
