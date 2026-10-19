@@ -4,7 +4,9 @@ name: Veille arrêtés de chasse
 # (scripts/lecture-nocturne.sh, opencode local), pas sur GitHub.
 # Rythme : quotidien d'avril à août, hebdomadaire (lundi) le reste de l'année — décidé dans le job.
 # Les sites .gouv.fr n'acceptent que des adresses françaises : le job ouvre une connexion hide.me (serveur gratuit free-fr) avant la collecte
-# et la referme à la fin (recette : meschasses/docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md §2).
+# et la referme juste après elle : lecture mécanique, images et santé (R2 et Supabase seulement) tournent hors VPN
+# (recette : meschasses/docs/superpowers/specs/2026-10-14-veille-arretes-chasse-acces-prefectures.md §2).
+# Une étape hide.me en échec ne coupe pas le job : la collecte tourne alors sans --sortie-france (sources .gouv.fr écartées).
 # Le cron est suspendu tant que le secret HIDEME_USER est absent ; le lancement manuel reste possible (option sans_proxy :
 # pas de connexion hide.me, sources .gouv.fr écartées). VEILLE_PROXY_URL reste lu en secours (lancement manuel sans hide.me).
 # Le lundi (planifié), le job « bilan » commite etat/dernier-bilan.json : un commit réel par semaine garde le cron actif
@@ -80,14 +82,18 @@ jobs:
         if: steps.rythme.outputs.go == 'true'
         run: npm ci
       - name: Client hide.me
+        id: client
         if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        continue-on-error: true
         run: |
           curl -sSL -o h.tgz https://github.com/eventure/hide.client.linux/releases/download/v0.9.14/hide.me-linux-amd64-0.9.14.tar.gz
           # Intégrité : empreinte épinglée de la v0.9.14 (à recalculer à la main en cas de changement de version).
           echo "3e9d6842a95a2c91c6e91bdf86389cd74390dda491f206b5b07c402254a56d8f  h.tgz" | sha256sum -c -
           mkdir hide && tar -xzf h.tgz -C hide
       - name: Jeton hide.me
-        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        id: jeton
+        if: steps.client.outcome == 'success'
+        continue-on-error: true
         working-directory: hide
         env:
           HU: ${{ secrets.HIDEME_USER }}
@@ -103,7 +109,9 @@ jobs:
           sudo test -s accessToken.txt
       - name: Connexion France
         id: vpn
-        if: steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        if: steps.jeton.outcome == 'success'
+        # Échec (pas de sortie FR) : le job continue, `sortie` reste vide et la collecte écarte les sources .gouv.fr.
+        continue-on-error: true
         working-directory: hide
         run: |
           sudo nohup ./hide.me -c conf.json connect free-fr.hideservers.net > ../hideme.log 2>&1 &
@@ -157,6 +165,18 @@ jobs:
           # Posé seulement si « Connexion France » a vérifié une sortie FR : les sources .gouv.fr ne sont alors plus écartées.
           [ "$SORTIE_FRANCE" = "true" ] && args+=(--sortie-france)
           npm run veille -- collecter --budget-min 45 "${args[@]}" | tee collecte.json
+      # Juste après la collecte, seule étape qui a besoin d'une sortie française ; toujours exécutée (collecte en échec comprise).
+      - name: Déconnexion
+        if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
+        run: |
+          sudo pkill -INT -f 'hide.me .*connect' || true
+          # L'arrêt est asynchrone : on attend la fin du client (15 s au plus) pour que les étapes suivantes partent sans le VPN.
+          # `[h]ide.me` : le motif ne se reconnaît pas lui-même dans la ligne de commande de pgrep.
+          for i in $(seq 1 15); do pgrep -f '[h]ide.me .*connect' > /dev/null || break; sleep 1; done
+          pgrep -f '[h]ide.me .*connect' > /dev/null && echo "hide.me toujours actif après 15 s" || echo "hide.me arrêté"
+          echo "pays après déconnexion : $(curl -s -m 8 https://ipinfo.io/country || true)"
+          # Aucune trace des identifiants ni du jeton dans l'espace de travail (artefacts, étapes suivantes).
+          sudo rm -f hide/conf.json hide/accessToken.txt hide/base.json
       - name: Lecture mécanique
         if: steps.rythme.outputs.go == 'true'
         env:
@@ -190,17 +210,6 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- sante | tee sante.json
-      - name: Déconnexion
-        if: always() && steps.rythme.outputs.go == 'true' && steps.rythme.outputs.france == 'true' && github.event.inputs.sans_proxy != 'true'
-        run: |
-          sudo pkill -INT -f 'hide.me .*connect' || true
-          # L'arrêt est asynchrone : on attend la fin du client (15 s au plus) pour que le téléversement des artefacts parte sans le VPN.
-          # `[h]ide.me` : le motif ne se reconnaît pas lui-même dans la ligne de commande de pgrep.
-          for i in $(seq 1 15); do pgrep -f '[h]ide.me .*connect' > /dev/null || break; sleep 1; done
-          pgrep -f '[h]ide.me .*connect' > /dev/null && echo "hide.me toujours actif après 15 s" || echo "hide.me arrêté"
-          echo "pays après déconnexion : $(curl -s -m 8 https://ipinfo.io/country || true)"
-          # Aucune trace des identifiants ni du jeton dans l'espace de travail (artefacts, étapes suivantes).
-          sudo rm -f hide/conf.json hide/accessToken.txt hide/base.json
       - uses: actions/upload-artifact@v4
         if: always() && steps.rythme.outputs.go == 'true'
         with:
