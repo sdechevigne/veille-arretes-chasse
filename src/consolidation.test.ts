@@ -3,13 +3,13 @@ import { comparerLectures, deptDetecte, nomDepartementNormalise } from './consol
 import type { LectureClaude, PeriodeLue } from './types.ts'
 
 const per = (o: Partial<PeriodeLue>): PeriodeLue => ({ espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'tous_modes',
-  restriction_dates: null, source_article: '1', preuve: { article: '1', citation: 'citation quelconque assez longue', page: 1, annee_deduite: false }, ...o })
+  restriction_dates: null, source_article: '1', preuve: { article: '1', citation: 'citation quelconque assez longue', page: 1, annee_deduite: false, extraits: [] }, ...o })
 const lect = (periodes: PeriodeLue[]): LectureClaude => ({ acte: { numero: null, date: null, objet: 'x', signe: true, departement_lu: null, saison_lue: null }, periodes, suppressions: [], notes: '', pages_illisibles: [] })
 
 describe('comparerLectures', () => {
   it('ordre de lecture, citation et page indifférents ; mode nul = tous modes ; cerf sans sous-type = élaphe', () => {
     const a = lect([per({}), per({ espece_code: 'cerf', mode_chasse: 'battue' }), per({ espece_code: 'lievre', mode_chasse: '' })])
-    const b = lect([per({ espece_code: 'lievre', mode_chasse: 'tous_modes', preuve: { article: '2', citation: 'autre citation tout aussi longue', page: 3, annee_deduite: true } }),
+    const b = lect([per({ espece_code: 'lievre', mode_chasse: 'tous_modes', preuve: { article: '2', citation: 'autre citation tout aussi longue', page: 3, annee_deduite: true, extraits: [] } }),
       per({ espece_code: 'cerf', sous_type: 'cerf_elaphe', mode_chasse: 'battue' }), per({})])
     expect(comparerLectures(a, b)).toEqual({ ecarts: [], secondaires: [] })
   })

@@ -161,7 +161,8 @@
               "article",
               "citation",
               "page",
-              "annee_deduite"
+              "annee_deduite",
+              "extraits"
             ],
             "properties": {
               "article": {
@@ -181,6 +182,15 @@
               },
               "annee_deduite": {
                 "type": "boolean"
+              },
+              "extraits": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                  "type": "string",
+                  "minLength": 8,
+                  "maxLength": 200
+                }
               }
             }
           }
@@ -196,7 +206,8 @@
           "espece_code",
           "sous_type",
           "citation",
-          "page"
+          "page",
+          "extraits"
         ],
         "properties": {
           "espece_code": {
@@ -253,6 +264,15 @@
           "page": {
             "type": "integer",
             "minimum": 1
+          },
+          "extraits": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 200
+            }
           }
         }
       }

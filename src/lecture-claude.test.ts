@@ -17,7 +17,7 @@ const ART2 = "Article 2 : Le chevreuil peut être chassé à l'approche du 1er j
 const AP = [[ENTETE, ART1, ART2, 'Fait à Nancy, le 12 mai 2026'].join('\n')]
 const PROJET = [["PROJET D'ARRÊTÉ\nrelatif à l'ouverture et à la clôture de la chasse pour la campagne 2026-2027", ART1, ART2, 'Fait à , le'].join('\n')]
 
-const preuve = (citation: string, page = 1) => ({ article: '1', citation, page, annee_deduite: false })
+const preuve = (citation: string, page = 1) => ({ article: '1', citation, page, annee_deduite: false, extraits: [] as string[] })
 const P1: PeriodeLue = { espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'tous_modes', restriction_dates: null, source_article: 'Article 1', preuve: preuve('Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027') }
 const P2: PeriodeLue = { espece_code: 'chevreuil', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28', mode_chasse: 'approche_affut', restriction_dates: null, source_article: 'Article 2', preuve: preuve("Le chevreuil peut être chassé à l'approche du 1er juin 2026 au 28 février 2027") }
 const ACTE = { numero: '2026/DDT/12', date: '2026-05-12', objet: 'Ouverture et clôture de la chasse 2026-2027', signe: true, departement_lu: 'Meurthe-et-Moselle', saison_lue: '2026-2027' }
@@ -288,6 +288,18 @@ describe('lireAvecClaude', () => {
     expect(p.c1.ok).toBe(false); expect(p.c1.details).toContain('lecture sur image impossible : claude timeout : échec timeout')
   })
 
+  it('renvoi à la clôture générale : C1 ok sans relance, date retenue notée dans la lecture', async () => {
+    const art2 = 'Article 2 : Le chevreuil peut être chassé du 1er juin 2026 à la clôture générale.'
+    const pages = [[ENTETE, 'Article 1 : La clôture générale de la chasse est fixée au 28 février 2027.', art2, 'Fait à Nancy, le 12 mai 2026'].join('\n')]
+    const s = sortie({ periodes: [{ ...P2, mode_chasse: 'tous_modes', preuve: preuve('Le chevreuil peut être chassé du 1er juin 2026 à la clôture générale') }] })
+    const m = await monter([{ pages }], [ok(s)])
+    await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(1)
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1).toEqual({ ok: true, details: [] })
+    expect(p.lecture.notes).toContain('période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)')
+  })
+
   it('texte / image : seule la restriction diffère → concordantes, différence notée', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
     const image = sortie({ periodes: [{ ...P1, restriction_dates: 'samedi et dimanche' }, s.periodes[1]] })
@@ -469,7 +481,7 @@ describe('lireAvecClaude', () => {
 
   it('modificatif ne faisant que supprimer : proposition soumise, extrait source = citation de la suppression', async () => {
     const pages = [MODIF[0].replace(/Article 1 : .*/, 'Article 1 : La chasse du lièvre est suspendue du 1er octobre 2026 au 1er décembre 2026.')]
-    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1 }
+    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1, extraits: [] as string[] }
     const m = await monter([{ type: 'modificatif', pages }], [ok(sortie({ periodes: [], suppressions: [supp] }))])
     m.depot.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete: ARRETE, periodes: [publiee({}), publiee({ espece_code: 'lievre', date_ouverture: '2026-10-01', date_fermeture: '2026-12-01' })] })
     await m.lancer()
@@ -482,7 +494,7 @@ describe('lireAvecClaude', () => {
 
   it('suppression et période lues : l’extrait source reste la citation d’une période', async () => {
     const pages = [MODIF[0].replace('Fait à', 'Article 2 : La chasse du lièvre est suspendue.\nFait à')]
-    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1 }
+    const supp = { espece_code: 'lievre', sous_type: null, citation: 'La chasse du lièvre est suspendue', page: 1, extraits: [] as string[] }
     const m = await monter([{ type: 'modificatif', pages }], [ok(sortie({ periodes: [P_MODIF], suppressions: [supp] }))])
     m.depot.etat.publiees.push({ departement: '54', saison: '2026-2027', arrete: ARRETE, periodes: [publiee({}), publiee({ espece_code: 'lievre', date_ouverture: '2026-10-01', date_fermeture: '2026-12-01' })] })
     await m.lancer()

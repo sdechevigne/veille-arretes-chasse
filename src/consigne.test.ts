@@ -42,6 +42,14 @@ describe('chargerConsigne', () => {
     expect(systeme).toMatch(/`pages_illisibles`/)
   })
 
+  it('preuve composée : `extraits` (0 à 3 extraits de 8 à 200 caractères) sur chaque preuve et chaque suppression, décrit dans la consigne', () => {
+    const extraits = { type: 'array', maxItems: 3, items: { type: 'string', minLength: 8, maxLength: 200 } }
+    expect(periode.preuve.properties.extraits).toEqual(extraits)
+    expect(suppression.extraits).toEqual(extraits)
+    expect(systeme).toMatch(/`extraits`/)
+    expect(systeme).toMatch(/ouverture générale/)
+  })
+
   it('la consigne cite chaque espèce, chaque mode et chaque sous-type', () => {
     for (const mot of [...ESPECES, ...MODES, ...SOUS_TYPES]) expect(systeme).toMatch(new RegExp(`\\b${mot}\\b`))
   })

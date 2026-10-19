@@ -38,12 +38,14 @@ const nombresDe = (t: string): Map<string, number> => {
 
 // ok = sous-chaîne exacte (score 1) ou meilleure fenêtre glissante (pas de 1) de même longueur à ≥ 0,9 ET
 // portant tous les nombres de la citation (un chiffre, un jour ou une année altéré ne passe jamais).
-export function trouverCitation(citation: string, page: string): { ok: boolean; score: number } {
+// debut = position dans la page normalisée (sous-chaîne exacte, sinon meilleure fenêtre) ; -1 sans fenêtre (citation vide).
+export function trouverCitation(citation: string, page: string): { ok: boolean; score: number; debut: number } {
   const c = normaliser(citation), p = normaliser(page)
-  if (!c) return { ok: false, score: 0 }
-  if (p.includes(c)) return { ok: true, score: 1 }
+  if (!c) return { ok: false, score: 0, debut: -1 }
+  const exact = p.indexOf(c)
+  if (exact >= 0) return { ok: true, score: 1, debut: exact }
   const L = Math.min(c.length, p.length)
-  if (L < 2) return { ok: false, score: 0 }
+  if (L < 2) return { ok: false, score: 0, debut: -1 }
   const cible = bigrammes(c)
   const fenetre = new Map<string, number>()
   let commun = 0
@@ -58,8 +60,8 @@ export function trouverCitation(citation: string, page: string): { ok: boolean; 
     const s = score()
     if (s > meilleur) { meilleur = s; debut = i }
   }
-  if (meilleur < SEUIL_CITATION) return { ok: false, score: meilleur }
+  if (meilleur < SEUIL_CITATION) return { ok: false, score: meilleur, debut }
   const presents = nombresDe(p.slice(Math.max(debut - MARGE_NOMBRES, 0), debut + L + MARGE_NOMBRES))
-  for (const [n, k] of nombresDe(c)) if ((presents.get(n) ?? 0) < k) return { ok: false, score: meilleur }
-  return { ok: true, score: meilleur }
+  for (const [n, k] of nombresDe(c)) if ((presents.get(n) ?? 0) < k) return { ok: false, score: meilleur, debut }
+  return { ok: true, score: meilleur, debut }
 }

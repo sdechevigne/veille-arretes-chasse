@@ -9,7 +9,7 @@ const preuveCore = { code_detecte: '60', dept_detecte: 'Oise', millesime_detecte
 const lue = (o: Partial<PeriodeLue>): PeriodeLue => ({
   espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28',
   mode_chasse: 'tous_modes', restriction_dates: null, source_article: 'Article 1',
-  preuve: { article: '1', citation: 'x', page: 1, annee_deduite: false }, ...o,
+  preuve: { article: '1', citation: 'x', page: 1, annee_deduite: false, extraits: [] }, ...o,
 })
 const entree = (periodes: (PeriodeLue | PeriodePubliee)[], o: object = {}) => ({
   departement: '60', saison: '2026-2027', statut: 'signe' as const, acte, url: 'https://exemple.test/arrete.pdf', periodes, notes: '', preuveCore, ...o,

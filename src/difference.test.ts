@@ -10,7 +10,7 @@ const publiee = (o: Partial<PeriodePubliee>): PeriodePubliee => ({
 const lue = (o: Partial<PeriodeLue>): PeriodeLue => ({
   espece_code: 'sanglier', sous_type: null, date_ouverture: '2026-06-01', date_fermeture: '2027-02-28',
   mode_chasse: 'tous_modes', restriction_dates: null, source_article: 'Article 1',
-  preuve: { article: '1', citation: 'x', page: 1, annee_deduite: false }, ...o,
+  preuve: { article: '1', citation: 'x', page: 1, annee_deduite: false, extraits: [] }, ...o,
 })
 const lecture = (periodes: PeriodeLue[], suppressions: LectureClaude['suppressions'] = []): LectureClaude => ({
   acte: { numero: null, date: null, objet: '', signe: true, departement_lu: null, saison_lue: null },
@@ -61,7 +61,7 @@ describe('appliquerDifference', () => {
   it('une suppression retire les publiées de même (espèce, sous-type) et lève suppressionExplicite', () => {
     const r = appliquerDifference(
       [publiee({ espece_code: 'daim' }), publiee({ espece_code: 'daim', mode_chasse: 'battue' }), publiee({})],
-      lecture([], [{ espece_code: 'daim', sous_type: null, citation: 'x', page: 2 }]),
+      lecture([], [{ espece_code: 'daim', sous_type: null, citation: 'x', page: 2, extraits: [] }]),
     )
     expect(r.periodes.map(p => p.espece_code)).toEqual(['sanglier'])
     expect(r.suppressionExplicite).toBe(true)
@@ -71,13 +71,13 @@ describe('appliquerDifference', () => {
   it('une suppression de sous-type ne touche pas l\'autre sous-type', () => {
     const r = appliquerDifference(
       [publiee({ espece_code: 'cerf', sous_type: 'cerf_elaphe' }), publiee({ espece_code: 'cerf', sous_type: 'cerf_sika' })],
-      lecture([], [{ espece_code: 'cerf', sous_type: 'cerf_sika', citation: 'x', page: 1 }]),
+      lecture([], [{ espece_code: 'cerf', sous_type: 'cerf_sika', citation: 'x', page: 1, extraits: [] }]),
     )
     expect(r.periodes.map(p => p.sous_type)).toEqual(['cerf_elaphe'])
   })
 
   it('suppression sans rien de publié : drapeau levé et journal explicite', () => {
-    const r = appliquerDifference([], lecture([], [{ espece_code: 'daim', sous_type: null, citation: 'x', page: 1 }]))
+    const r = appliquerDifference([], lecture([], [{ espece_code: 'daim', sous_type: null, citation: 'x', page: 1, extraits: [] }]))
     expect(r.suppressionExplicite).toBe(true)
     expect(r.journal).toEqual(['suppression daim : aucune période publiée'])
   })

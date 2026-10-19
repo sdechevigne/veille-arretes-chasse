@@ -14,7 +14,18 @@ describe('similarite', () => {
 })
 describe('trouverCitation', () => {
   const page = 'Article 3 — Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement.'
-  it('retrouve une sous-chaîne exacte', () => expect(trouverCitation('du 11 octobre 2026 au 29 novembre 2026', page)).toEqual({ ok: true, score: 1 }))
+  it('retrouve une sous-chaîne exacte, avec sa position dans la page normalisée', () => {
+    const c = 'du 11 octobre 2026 au 29 novembre 2026'
+    expect(trouverCitation(c, page)).toEqual({ ok: true, score: 1, debut: normaliser(page).indexOf(normaliser(c)) })
+    expect(trouverCitation('Lièvre', page).debut).toBe(normaliser(page).indexOf(normaliser('Lièvre')))
+  })
+  it('position de la meilleure fenêtre pour une citation approchée (retrouvée ou non)', () => {
+    const debut = normaliser(page).indexOf('le lievre est ouvert')
+    expect(trouverCitation('Le libre est ouvert du 11 octobre 2026 au 29 novembre 2026', page).debut).toBe(debut)
+    // Fenêtre non retrouvée : à un caractère près (une espace voisine peut égaler le score).
+    const r = trouverCitation('le liavre est ouvart du ll octobre', page)
+    expect(r.ok).toBe(false); expect(Math.abs(r.debut - debut)).toBeLessThanOrEqual(1)
+  })
   it("tolère une faute d'OCR légère", () => expect(trouverCitation('Le libre est ouvert du 11 octobre 2026 au 29 novembre 2026', page).ok).toBe(true))
   it('refuse une citation inventée', () => expect(trouverCitation('du 11 octobre 2026 au 31 janvier 2027', page).ok).toBe(false))
 })
@@ -29,10 +40,10 @@ describe('normaliser (variantes)', () => {
 describe('trouverCitation (limites)', () => {
   const page = 'Article 3 — Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement.'
   it('refuse une citation vide, une page vide, ou les deux', () => {
-    expect(trouverCitation('', page)).toEqual({ ok: false, score: 0 })
-    expect(trouverCitation('   ', page)).toEqual({ ok: false, score: 0 })
+    expect(trouverCitation('', page)).toEqual({ ok: false, score: 0, debut: -1 })
+    expect(trouverCitation('   ', page)).toEqual({ ok: false, score: 0, debut: -1 })
     expect(trouverCitation('du 11 octobre 2026', '').ok).toBe(false)
-    expect(trouverCitation('', '')).toEqual({ ok: false, score: 0 })
+    expect(trouverCitation('', '')).toEqual({ ok: false, score: 0, debut: -1 })
   })
   it('gère une citation plus longue que la page', () => {
     expect(trouverCitation('Le lièvre est ouvert du 11 octobre 2026 au 29 novembre 2026, le dimanche seulement, sauf dérogation.', page).ok).toBe(false)

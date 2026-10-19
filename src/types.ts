@@ -33,13 +33,14 @@ export interface PeriodeLue {
   espece_code: string; sous_type: 'cerf_elaphe' | 'cerf_sika' | 'perdrix_grise' | 'perdrix_rouge' | null
   date_ouverture: string; date_fermeture: string; mode_chasse: string
   restriction_dates: string | null; source_article: string | null
-  preuve: { article: string | null; citation: string; page: number; annee_deduite: boolean }
+  /** `extraits` : au plus 3 extraits exacts de la même page qui portent ce qui manque à la citation (espèce d'un tableau, renvoi). */
+  preuve: { article: string | null; citation: string; page: number; annee_deduite: boolean; extraits: string[] }
 }
 export interface ActeLu { numero: string | null; date: string | null; objet: string; signe: boolean; departement_lu: string | null; saison_lue: string | null }
 /** Sortie JSON imposée à Claude par schéma. */
 export interface LectureClaude {
   acte: ActeLu; periodes: PeriodeLue[]
-  suppressions: { espece_code: string; sous_type: string | null; citation: string; page: number }[]
+  suppressions: { espece_code: string; sous_type: string | null; citation: string; page: number; extraits: string[] }[]
   notes: string
   /** Pages dont le texte est trop abîmé pour lire espèces et dates (seules les pages OCR sont relues en image). */
   pages_illisibles: number[]
