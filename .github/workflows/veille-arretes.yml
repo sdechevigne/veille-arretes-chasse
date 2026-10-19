@@ -107,9 +107,35 @@ jobs:
         working-directory: hide
         run: |
           sudo nohup ./hide.me -c conf.json connect free-fr.hideservers.net > ../hideme.log 2>&1 &
-          for i in $(seq 1 30); do [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] && break; sleep 3; done
-          # Pas de sortie française : échec de l'étape avec la fin du journal hide.me (filtré : jamais une ligne évoquant mot de passe ou jeton).
-          [ "$(curl -s -m 8 https://ipinfo.io/country)" = FR ] || { tail -30 ../hideme.log | grep -viE 'password|token'; exit 1; }
+          # Pays de sortie : Cloudflare (ligne `loc=XX`), puis ipinfo si Cloudflare ne répond pas FR.
+          # Pose PAYS (dernière valeur obtenue) et DIAG (une ligne par service : valeur ou code de sortie de curl).
+          pays() {
+            local brut rc
+            brut=$(curl -s -m 8 https://www.cloudflare.com/cdn-cgi/trace) && rc=0 || rc=$?
+            PAYS=$(printf '%s\n' "$brut" | sed -n 's/^loc=//p' | head -1)
+            DIAG="cloudflare=${PAYS:-vide(curl=$rc)}"
+            [ "$PAYS" = FR ] && return 0
+            PAYS=$(curl -s -m 8 https://ipinfo.io/country | tr -d '[:space:]' | head -c 20) && rc=0 || rc=$?
+            DIAG="$DIAG ipinfo=${PAYS:-vide(curl=$rc)}"
+          }
+          # 1. Attendre que le tunnel soit monté (« Link: Up » dans le journal), 60 s au plus.
+          for i in $(seq 1 30); do grep -q 'Link: Up' ../hideme.log && break; sleep 2; done
+          # 2. Vérifier la sortie française (30 essais), avec une ligne de diagnostic par essai échoué.
+          for i in $(seq 1 30); do
+            pays
+            [ "$PAYS" = FR ] && break
+            echo "essai $i/30 : sortie non française ($DIAG)"
+            sleep 3
+          done
+          # Pas de sortie française : échec de l'étape avec l'état réseau et la fin du journal hide.me
+          # (filtré : jamais une ligne évoquant mot de passe ou jeton ; rien de conf.json).
+          if [ "$PAYS" != FR ]; then
+            echo "--- DNS : getent hosts www.cloudflare.com"; getent hosts www.cloudflare.com || true
+            echo "--- /etc/resolv.conf"; cat /etc/resolv.conf
+            echo "--- ip route show table 55555"; ip route show table 55555 | head -5 || true
+            echo "--- journal hide.me (fin)"; tail -30 ../hideme.log | grep -viE 'password|token'
+            exit 1
+          fi
           echo "sortie=true" >> "$GITHUB_OUTPUT"
       - name: Collecte
         if: steps.rythme.outputs.go == 'true'
