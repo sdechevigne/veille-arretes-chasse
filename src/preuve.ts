@@ -77,13 +77,36 @@ function renvoi(date: string, ouverture: boolean, preuve: string, generales: Dat
   return null
 }
 
-/** Pourquoi un extrait ne peut pas prouver l'espèce (Ruling R47), ou null : il doit précéder la citation sans qu'une autre
- *  espèce s'intercale (sinon l'espèce peut venir de la ligne voisine d'un tableau). Positions sur la page normalisée. */
-function ambiguite(page: string, extrait: { debut: number; fin: number }, citation: number, espece: string): string | null {
-  if (extrait.debut > citation) return 'après la citation'
-  const entre = page.slice(extrait.fin, citation)
-  const autre = Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(entre))
-  return autre ? `séparé de la citation par une autre espèce (${autre[0]})` : null
+/** Fragment d'une preuve composée, situé sur la page normalisée : occurrence de l'espèce (s'il la porte) et présence de dates. */
+interface Fragment { texte: string; debut: number; fin: number; dates: boolean; espece: { debut: number; fin: number } | null }
+
+const autreEspece = (t: string, espece: string): string | undefined =>
+  Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
+
+/** Extraits d'une preuve composée à écarter, avec leur raison (Rulings R47, R50) : dans un tableau, la ligne d'une espèce commence à
+ *  son nom. L'occurrence de l'espèce doit précéder tout fragment daté, sans autre espèce jusqu'à la fin de ce fragment ; et un
+ *  extrait qui apporte l'espèce absente de la citation doit précéder celle-ci de la même façon. Sinon l'espèce ou les dates
+ *  viennent d'une ligne voisine. Positions sur la page normalisée. */
+function extraitsAmbigus(page: string, citation: Fragment, extraits: Fragment[], espece: string): Map<Fragment, string> {
+  const ambigus = new Map<Fragment, string>()
+  let occ = citation.espece
+  if (!occ) {
+    // L'espèce vient d'un extrait : il doit précéder la citation (jusqu'à sa fin si elle porte des dates, son début sinon).
+    for (const e of extraits.filter(x => x.espece)) {
+      if (e.espece.debut > citation.debut) { ambigus.set(e, 'après la citation'); continue }
+      const code = autreEspece(page.slice(e.espece.fin, citation.dates ? citation.fin : citation.debut), espece)
+      if (code) ambigus.set(e, `séparé de la citation par une autre espèce (${code})`)
+      else occ ??= e.espece
+    }
+  }
+  if (!occ) return ambigus
+  // Extraits datés qui ne portent pas eux-mêmes l'espèce : après son occurrence, sans autre espèce intercalée.
+  for (const e of extraits.filter(x => x.dates && !x.espece && !ambigus.has(x))) {
+    if (e.debut < occ.debut) { ambigus.set(e, "placé avant l'espèce"); continue }
+    const code = autreEspece(page.slice(occ.fin, e.fin), espece)
+    if (code) ambigus.set(e, `séparé de l'espèce par une autre espèce (${code})`)
+  }
+  return ambigus
 }
 
 /** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
@@ -114,29 +137,30 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       echouer(altere ? 'nombre_altere' : 'citation_introuvable', `${prefixe}${altere ? 'citation introuvable ou nombre altéré' : 'citation introuvable'} (similarité ${pct(trouvee.score)})`, trouvee.score)
       return null
     }
-    // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien. Un extrait qui apporte
-    // l'espèce absente de la citation doit en plus la précéder sans autre espèce intercalée.
+    // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien.
     const motif = motifEspece(espece, sousType)
-    const especeCitee = !!motif?.test(citation)
     const pageNorm = normaliser(page.texte)
-    const preuve = [citation]
-    let especeParExtrait: string | undefined
+    const fragment = (texte: string, debut: number): Fragment => {
+      const fin = debut + normaliser(texte).length, contenu = pageNorm.slice(debut, fin), m = motif?.exec(contenu)
+      return { texte, debut, fin, dates: datesDe(contenu, saison).length > 0, espece: m ? { debut: debut + m.index, fin: debut + m.index + m[0].length } : null }
+    }
+    const retenus: Fragment[] = []
     for (const extrait of extraits) {
       const e = trouverCitation(extrait, page.texte)
       if (!e.ok) { echouer('extrait_introuvable', `${prefixe}extrait « ${extrait} » introuvable (similarité ${pct(e.score)})`, e.score); continue }
       const ecart = Math.abs(e.debut - trouvee.debut)
       if (ecart > DISTANCE_MAX_FRAGMENTS) { echouer('extraits_eloignes', `${prefixe}extrait « ${extrait} » trop éloigné de la citation (${ecart} caractères)`); continue }
-      if (motif && !especeCitee && motif.test(extrait)) {
-        const raison = ambiguite(pageNorm, { debut: e.debut, fin: e.debut + normaliser(extrait).length }, trouvee.debut, espece)
-        if (raison) { echouer('extrait_ambigu', `${prefixe}extrait « ${extrait} » ${raison}`); continue }
-        especeParExtrait ??= extrait
-      }
-      preuve.push(extrait)
+      retenus.push(fragment(extrait, e.debut))
     }
-    const texte = preuve.join(' ')
+    // Preuve composée : l'espèce doit ouvrir la ligne de ses dates (R47, R50) ; une preuve sans extrait reste inchangée.
+    const cite = fragment(citation, trouvee.debut)
+    const ambigus = retenus.length ? extraitsAmbigus(pageNorm, cite, retenus, espece) : new Map<Fragment, string>()
+    for (const [e, raison] of ambigus) echouer('extrait_ambigu', `${prefixe}extrait « ${e.texte} » ${raison}`)
+    const preuve = [cite, ...retenus.filter(e => !ambigus.has(e))]
+    const texte = preuve.map(f => f.texte).join(' ')
     if (!motif) echouer('espece_sans_motif', `${prefixe}espèce sans motif de recherche`)
     else if (!motif.test(texte)) echouer('espece_absente', `${prefixe}espèce absente de la citation`)
-    else if (especeParExtrait !== undefined) notes.push(`${prefixe}espèce prouvée par extrait « ${especeParExtrait} »`)
+    else if (!motif.test(citation)) notes.push(`${prefixe}espèce prouvée par extrait « ${preuve.find(f => motif.test(f.texte))!.texte} »`)
     return texte
   }
 

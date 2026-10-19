@@ -213,7 +213,40 @@ const chevreuilCloture = (o: Partial<PeriodeLue['preuve']> = {}): PeriodeLue => 
 const CLOTURE = 'Article 1 : La clôture générale est fixée au 28 février 2027.'
 const TABLEAU_CLOTURE = 'Article 3 :\nEspèces          Ouverture          Fermeture\nChevreuil          1er juin 2026          Clôture générale'
 
-describe('verifierPreuves — notes aux dates générales', () => {
+describe('verifierPreuves — preuve composée : l’espèce ouvre la ligne de ses dates (R50)', () => {
+  const chevreuil = (citation: string, extraits: string[], o: Partial<PeriodeLue> = {}) => periode({ citation, page: 1, espece_code: 'chevreuil',
+    date_ouverture: '2026-08-15', date_fermeture: '2027-03-31', preuve: { article: '3', citation, page: 1, annee_deduite: false, extraits }, ...o })
+  const SANGLIER = '15 août 2026         31 mars 2027'
+  it('espèce dans la citation, dates prises sur la ligne du sanglier → extrait_ambigu, dates non comptées', () => {
+    const r = verifierPreuves(lecture([chevreuil('Espèces            Ouverture            Fermeture\nChevreuil', [SANGLIER])]), [page(1, PAGE_TABLEAU)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente', 'date_absente'])
+    expect(r.details[0]).toBe(`période 1 (chevreuil) : extrait « ${SANGLIER} » séparé de l'espèce par une autre espèce (sanglier)`)
+    expect(levableSurImage(r.echecs[0])).toBe(false)
+  })
+  it('variante : citation « Chevreuil / 1er juin 2026 » + dates du sanglier → extrait_ambigu', () => {
+    const r = verifierPreuves(lecture([chevreuil('Chevreuil\n                   1er juin 2026', [SANGLIER])]), [page(1, PAGE_TABLEAU)], SAISON)
+    expect(r.ok).toBe(false)
+    expect(r.echecs[0]).toMatchObject({ nature: 'extrait_ambigu' })
+  })
+  it('ligne légitime (style Ille-et-Vilaine) : cellule de l’espèce puis ses dates, aucune autre espèce entre → ok', () => {
+    const texte = 'Lièvre          11 octobre 2026          13 décembre 2026\nSanglier         15 août 2026             31 mars 2027'
+    const r = verifierPreuves(lecture([chevreuil('Lièvre', ['11 octobre 2026          13 décembre 2026'], { espece_code: 'lievre', date_ouverture: '2026-10-11', date_fermeture: '2026-12-13' })]), [page(1, texte)], SAISON)
+    expect(r).toMatchObject({ ok: true, echecs: [] })
+  })
+  it('espèce placée après le fragment daté → extrait_ambigu', () => {
+    const r = verifierPreuves(lecture([chevreuil('Chevreuil', ['1er juin 2026        28 février 2027'], { date_ouverture: '2026-06-01', date_fermeture: '2027-02-28' })]),
+      [page(1, '1er juin 2026        28 février 2027\nChevreuil')], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente', 'date_absente'])
+    expect(r.details[0]).toBe("période 1 (chevreuil) : extrait « 1er juin 2026        28 février 2027 » placé avant l'espèce")
+  })
+  it('sans extrait, inchangé : un article qui cite plusieurs espèces pour les mêmes dates reste valable', () => {
+    const c = 'La chasse du lièvre, de la perdrix et du faisan est ouverte du 27 septembre 2026 au 28 février 2027'
+    const r = verifierPreuves(lecture([periode({ citation: c, page: 1, espece_code: 'lievre', date_ouverture: '2026-09-27', date_fermeture: '2027-02-28' })]), [page(1, `Article 2 : ${c}.`)], SAISON)
+    expect(r).toMatchObject({ ok: true, echecs: [] })
+  })
+})
+
+describe('verifierPreuves — renvois aux dates générales', () => {
   it('cellule « Clôture générale » + clôture générale datée sur la page → ok, renvoi noté', () => {
     const r = verifierPreuves(lecture([chevreuilCloture()]), [page(1, `${CLOTURE}\n${TABLEAU_CLOTURE}`)], SAISON)
     expect(r).toMatchObject({ ok: true, echecs: [], notes: ['période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)'] })
