@@ -1,0 +1,9 @@
+[Unit]
+Description=Veille arrêtés — lecture Claude chaque nuit à 02:30 (Paris)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Europe/Paris
+Persistent=false
+
+[Install]
+WantedBy=timers.target

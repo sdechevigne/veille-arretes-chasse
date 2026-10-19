@@ -46,6 +46,38 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 - `VEILLE_OPENCODE_URL`, `VEILLE_OPENCODE_PASSWORD` (mot de passe facultatif) : adresse et accès de l'opencode local utilisé par `lire-claude` ; posés par `scripts/lecture-nocturne.sh`, jamais à la main. Sans URL, `lire-claude` s'arrête (code 2).
 - `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées.
 
+## Lecture nocturne sur la machine Manta
+
+Chaque nuit à 02:30 (Paris), `scripts/lecture-nocturne.sh` lit la file avec Claude : il met le code à jour (`git fetch` + avance rapide seulement, `npm ci` si le verrou a changé), lance un opencode isolé (port libre, mot de passe aléatoire, dossier de travail vide, environnement minimal sans aucun secret du robot, configuration `opencode/opencode.jsonc`), exécute `lire-claude` puis `notifier` si besoin, et arrête opencode. Code de sortie 0 même au quota ou au budget.
+
+Emplacements (machine, hors dépôt) :
+
+- clone de déploiement : `~/.local/share/veille-arretes/robot` (`git clone https://github.com/sdechevigne/veille-arretes-chasse …`, puis `npm ci`) ;
+- secrets du robot : `~/.config/veille-arretes/env` (mode `0600`, lignes `NOM=valeur` : `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_*`, `MANTA_WEBHOOK_*`) ; la lecture Claude ne fait que lire R2, le jeton R2 de cette machine est en lecture seule ;
+- état : `~/.local/state/veille-arretes/` (un fichier `passages/<horodatage>.json` par passage, gardé 30 jours ; `opencode.log` ; dossier `opencode/` de l'instance isolée) ;
+- l'authentification Claude (`~/.local/share/opencode/auth.json`) et le plugin `manta-accounts` (rotation des sièges) sont ceux de l'opencode principal de la machine : lien symbolique et copie à chaque passage.
+
+Variables facultatives du script : `VEILLE_ETAT`, `VEILLE_SECRETS`, `OPENCODE_BIN` (emplacements), `VEILLE_LIMITE` (40 par défaut) et `VEILLE_DEPARTEMENTS` (essais ciblés, via `systemctl --user set-environment`).
+
+Déploiement :
+
+```bash
+mkdir -p ~/.config/systemd/user
+install -m 0644 systemd/veille-arretes-lecture.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now veille-arretes-lecture.timer
+systemctl --user list-timers | grep veille    # prochaine exécution : 02:30 Paris
+```
+
+Exploitation :
+
+```bash
+systemctl --user start veille-arretes-lecture.service      # essai manuel (un vrai passage)
+journalctl --user -u veille-arretes-lecture -n 50           # sortie du dernier passage
+systemctl --user disable --now veille-arretes-lecture.timer # arrêt d'urgence
+```
+
+Au premier lancement, opencode télécharge le plugin d'authentification Claude : le démarrage peut dépasser quelques dizaines de secondes (le script attend jusqu'à 60 s).
+
 ## Accès aux sites des préfectures
 
 Les préfectures (`*.gouv.fr`) refusent les adresses de serveurs hors de France.
