@@ -115,7 +115,7 @@ describe('levableSurImage', () => {
   })
   it('espèce absente, nombre altéré, date absente levables ; page introuvable et espèce sans motif bloquantes', () => {
     for (const nature of ['espece_absente', 'nombre_altere', 'date_absente'] as const) expect(levableSurImage({ page: 1, detail: '', nature })).toBe(true)
-    for (const nature of ['page_introuvable', 'espece_sans_motif'] as const) expect(levableSurImage({ page: 1, detail: '', nature })).toBe(false)
+    for (const nature of ['page_introuvable', 'espece_sans_motif', 'date_ecartee'] as const) expect(levableSurImage({ page: 1, detail: '', nature })).toBe(false)
   })
 })
 
@@ -239,18 +239,42 @@ describe('verifierPreuves — preuve composée : l’espèce ouvre la ligne de s
     expect(r.echecs.map(e => e.nature)).toEqual(['extrait_ambigu', 'date_absente', 'date_absente'])
     expect(r.details[0]).toBe("période 1 (chevreuil) : extrait « 1er juin 2026        28 février 2027 » placé avant l'espèce")
   })
-  it('extrait daté qui porte lui-même l’espèce : les dates de la ligne suivante (sanglier) ne comptent pas', () => {
-    const texte = 'Espèces            Ouverture            Fermeture\nChevreuil          1er juin 2026          Clôture générale\nSanglier           15 août 2026           31 mars 2027'
-    const r = verifierPreuves(lecture([chevreuil('Espèces            Ouverture            Fermeture\nChevreuil',
-      ['Chevreuil          1er juin 2026          Clôture générale\nSanglier           15 août 2026           31 mars 2027'])]), [page(1, texte)], SAISON)
+  // R51 : une date présente dans la preuve mais écartée est « écartée », jamais « absente » (sinon levable sur image).
+  const LIGNES_CHEVREUIL_SANGLIER = 'Chevreuil          1er juin 2026          Clôture générale\nSanglier           15 août 2026           31 mars 2027'
+  const ENTETE = 'Espèces            Ouverture            Fermeture'
+  it('extrait daté qui porte lui-même l’espèce : les dates de la ligne suivante (sanglier) sont écartées (R51)', () => {
+    const texte = `${ENTETE}\n${LIGNES_CHEVREUIL_SANGLIER}`
+    const r = verifierPreuves(lecture([chevreuil(`${ENTETE}\nChevreuil`, [LIGNES_CHEVREUIL_SANGLIER])]), [page(1, texte)], SAISON)
     expect(r.ok).toBe(false)
-    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente', 'date_absente'])
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee', 'date_ecartee'])
+    expect(r.details).toEqual([
+      "période 1 (chevreuil) : date d'ouverture 2026-08-15 écartée (autre espèce entre l'espèce et la date : sanglier)",
+      "période 1 (chevreuil) : date de fermeture 2027-03-31 écartée (autre espèce entre l'espèce et la date : sanglier)",
+    ])
   })
-  it('dates situées avant l’espèce (extrait « dates / Chevreuil » placé avant la citation) : ne comptent pas', () => {
+  it('dates situées avant l’espèce (extrait « dates / Chevreuil » placé avant la citation) : écartées (R51)', () => {
     const texte = '15 août 2026           31 mars 2027\nChevreuil\n1er juin 2026          Clôture générale'
     const r = verifierPreuves(lecture([chevreuil('1er juin 2026          Clôture générale', ['15 août 2026           31 mars 2027\nChevreuil'])]), [page(1, texte)], SAISON)
     expect(r.ok).toBe(false)
-    expect(r.echecs.map(e => e.nature)).toEqual(['date_absente', 'date_absente'])
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee', 'date_ecartee'])
+    expect(r.details).toEqual([
+      "période 1 (chevreuil) : date d'ouverture 2026-08-15 écartée (date placée avant l'espèce)",
+      "période 1 (chevreuil) : date de fermeture 2027-03-31 écartée (date placée avant l'espèce)",
+    ])
+  })
+  it('page OCR : une date écartée n’est pas levable sur image (R51)', () => {
+    const texte = `${ENTETE}\n${LIGNES_CHEVREUIL_SANGLIER}`
+    const ocr: PageTexte = { n: 1, source: 'ocr', texte, nbDates: 0, nbEspeces: 0 }
+    const r = verifierPreuves(lecture([chevreuil(`${ENTETE}\nChevreuil`, [LIGNES_CHEVREUIL_SANGLIER])]), [ocr], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee', 'date_ecartee'])
+    expect(r.echecs.every(e => !levableSurImage(e))).toBe(true)
+  })
+  it('un renvoi aux dates générales ne ressuscite pas une date écartée (R51)', () => {
+    const texte = `Article 1 : la clôture générale est fixée au 31 mars 2027.\nArticle 3 :\n${ENTETE}\n${LIGNES_CHEVREUIL_SANGLIER}`
+    const r = verifierPreuves(lecture([chevreuil(`${ENTETE}\nChevreuil`, [LIGNES_CHEVREUIL_SANGLIER], { date_ouverture: '2026-06-01' })]), [page(1, texte)], SAISON)
+    expect(r.echecs.map(e => e.nature)).toEqual(['date_ecartee'])
+    expect(r.details).toEqual(["période 1 (chevreuil) : date de fermeture 2027-03-31 écartée (autre espèce entre l'espèce et la date : sanglier)"])
+    expect(r.notes).toEqual([])
   })
   it('citation avec l’espèce et ses dates + extrait portant le renvoi → ok', () => {
     const texte = "Article 1 : la clôture générale est fixée au 28 février 2027.\nArticle 3 :\nChevreuil          1er juin 2026\n                   jusqu'à la clôture générale"

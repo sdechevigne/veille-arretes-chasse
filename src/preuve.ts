@@ -17,7 +17,7 @@ const SEUIL_NOMBRE_ALTERE = 0.9
 const pct = (x: number) => x.toFixed(2).replace('.', ',')
 
 export type NatureEchec = 'page_introuvable' | 'citation_introuvable' | 'nombre_altere' | 'espece_sans_motif' | 'espece_absente' | 'date_absente'
-  | 'extrait_introuvable' | 'extraits_eloignes' | 'extrait_ambigu'
+  | 'date_ecartee' | 'extrait_introuvable' | 'extraits_eloignes' | 'extrait_ambigu'
 /** Échec C1 d'un élément, avec la page déclarée par sa preuve (aiguillage texte natif / scan) ; `score` = similarité
  *  de la meilleure fenêtre pour une citation non retrouvée. */
 export interface EchecPreuve { page: number; detail: string; nature: NatureEchec; score?: number }
@@ -86,13 +86,13 @@ const autreEspece = (t: string, espece: string): string | undefined =>
   Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(t))?.[0]
 const RE_RENVOI = new RegExp(`${RE_OUVERTURE_GENERALE.source}|${RE_CLOTURE_GENERALE.source}`)
 
-/** Preuve composée (Rulings R47, R50) : dans un tableau, la ligne d'une espèce commence à son nom. Un extrait qui apporte l'espèce
+/** Preuve composée (Rulings R47, R50, R51) : dans un tableau, la ligne d'une espèce commence à son nom. Un extrait qui apporte l'espèce
  *  absente de la citation doit la précéder sans autre espèce intercalée ; puis, sur l'occurrence de l'espèce la plus proche avant
  *  les dates (`occ`), seule compte une date située après `occ` sans autre espèce entre `occ` et elle. Rend les extraits à écarter
- *  (avec leur raison) et les dates retenues ; sans occurrence de l'espèce, les dates ne sont pas filtrées (l'espèce manque déjà).
- *  Positions sur la page normalisée. */
+ *  (avec leur raison), les dates retenues et les dates écartées (présentes dans la preuve, refusées, avec leur raison) ;
+ *  sans occurrence de l'espèce, les dates ne sont pas filtrées (l'espèce manque déjà). Positions sur la page normalisée. */
 function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], motif: RegExp, espece: string, saison: string)
-  : { ambigus: Map<Fragment, string>; dates: string[] } {
+  : { ambigus: Map<Fragment, string>; dates: string[]; ecartees: Map<string, string> } {
   const tranche = (f: Fragment) => page.slice(f.debut, f.fin)
   const especesDe = (f: Fragment): Occurrence[] => [...tranche(f).matchAll(new RegExp(motif.source, `${motif.flags.replace('g', '')}g`))]
     .map(m => ({ debut: f.debut + m.index, fin: f.debut + m.index + m[0].length }))
@@ -114,7 +114,7 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
   const dates = gardes.flatMap(datesDeFragment)
   const uniques = (ds: DateSituee[]) => [...new Map(ds.map(d => [d.debut, d.iso])).values()]
   const occurrences = gardes.flatMap(especesDe)
-  if (!occurrences.length) return { ambigus, dates: uniques(dates) }
+  if (!occurrences.length) return { ambigus, dates: uniques(dates), ecartees: new Map() }
   const valide = (s: Occurrence, d: DateSituee) => d.debut >= s.fin && !autreEspece(page.slice(s.fin, d.fin), espece)
   // `occ` : l'occurrence qui valide le plus de dates ; à égalité, la plus proche avant elles (la plus tardive).
   const occ = occurrences.reduce((m, s) => {
@@ -129,14 +129,25 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
     const d = siennes[0]
     ambigus.set(e, d.debut < occ.fin ? "placé avant l'espèce" : `séparé de l'espèce par une autre espèce (${autreEspece(page.slice(occ.fin, d.fin), espece)})`)
   }
-  return { ambigus, dates: uniques(dates.filter(d => valide(occ, d))) }
+  const retenues = dates.filter(d => valide(occ, d))
+  // Dates écartées (Ruling R51) : présentes dans un fragment conservé, refusées par la règle ci-dessus, et introuvables
+  // ailleurs dans la preuve. Celles d'un extrait ambigu ne comptent pas : cet extrait est retiré de la preuve.
+  const vues = new Set(retenues.map(d => d.iso))
+  const ecartees = new Map<string, string>()
+  for (const d of dates) {
+    if (vues.has(d.iso) || ecartees.has(d.iso) || valide(occ, d) || ambigus.has(d.fragment)) continue
+    ecartees.set(d.iso, d.debut < occ.fin ? "date placée avant l'espèce"
+      : `autre espèce entre l'espèce et la date : ${autreEspece(page.slice(occ.fin, d.fin), espece)}`)
+  }
+  return { ambigus, dates: uniques(retenues), ecartees }
 }
 
 /** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
 export const SEUIL_CITATION_ABIMEE = 0.5
 
 /** Échec qu'un texte OCR abîmé peut expliquer, donc levable par une lecture sur image concordante.
- *  Un extrait éloigné ou ambigu ne l'est jamais (assemblage possible de morceaux sans rapport). Pour un extrait court
+ *  Un extrait éloigné ou ambigu ne l'est jamais (assemblage possible de morceaux sans rapport), ni une date écartée
+ *  (Ruling R51 : une lecture sur image concordante répéterait l'emprunt à la ligne voisine). Pour un extrait court
  *  (nom d'espèce), le seuil de similarité 0,5 est faible : la levée repose alors sur la concordance des lectures sur image. */
 export const levableSurImage = (e: EchecPreuve): boolean =>
   e.nature === 'espece_absente' || e.nature === 'nombre_altere' || e.nature === 'date_absente'
@@ -149,7 +160,7 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
   // Vérifie page, citation, extraits et espèce ; renvoie le texte de la preuve (citation et extraits retenus) et ses dates
   // si la citation est retrouvée (pour poursuivre sur les dates), null sinon.
   const verifierCitation = (etiquette: string, espece: string, sousType: string | null, citation: string, numPage: number, extraits: string[])
-    : { texte: string; dates: string[] } | null => {
+    : { texte: string; dates: string[]; ecartees: Map<string, string> } | null => {
     const prefixe = `${etiquette} (${espece}) : `
     const echouer = (nature: NatureEchec, detail: string, score?: number) => { echecs.push({ page: numPage, detail, nature, ...(score === undefined ? {} : { score }) }) }
     const page = pages.find(p => p.n === numPage)
@@ -182,7 +193,7 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     if (!motif) echouer('espece_sans_motif', `${prefixe}espèce sans motif de recherche`)
     else if (!motif.test(texte)) echouer('espece_absente', `${prefixe}espèce absente de la citation`)
     else if (!motif.test(citation)) notes.push(`${prefixe}espèce prouvée par extrait « ${preuve.find(f => motif.test(f.texte))!.texte} »`)
-    return { texte, dates: composee?.dates ?? datesDe(normaliser(texte), saison) }
+    return { texte, dates: composee?.dates ?? datesDe(normaliser(texte), saison), ecartees: composee?.ecartees ?? new Map() }
   }
 
   lecture.periodes.forEach((p, i) => {
@@ -190,10 +201,15 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     const verifiee = verifierCitation(`période ${i + 1}`, p.espece_code, p.sous_type, citation, page, extraits)
     if (verifiee === null) return
     const preuve = normaliser(verifiee.texte)
-    const vues = verifiee.dates.map(d => (annee_deduite ? d.slice(5) : d))
+    const cle = (d: string) => (annee_deduite ? d.slice(5) : d)
+    const vues = verifiee.dates.map(cle)
+    const ecartees = new Map([...verifiee.ecartees].map(([iso, raison]) => [cle(iso), raison]))
     const prefixe = `période ${i + 1} (${p.espece_code}) : `
     for (const [libelle, date, ouverture] of [["d'ouverture", p.date_ouverture, true], ['de fermeture', p.date_fermeture, false]] as const) {
-      if (vues.includes(annee_deduite ? date.slice(5) : date)) continue
+      if (vues.includes(cle(date))) continue
+      // Date écrite dans la preuve mais refusée par la règle de ligne (Ruling R51) : jamais levable, et aucun renvoi ne la rattrape.
+      const ecartee = ecartees.get(cle(date))
+      if (ecartee) { echecs.push({ page, nature: 'date_ecartee', detail: `${prefixe}date ${libelle} ${date} écartée (${ecartee})` }); continue }
       // Renvoi admis seulement si la preuve porte au plus une date littérale (Ruling R48) : au-delà, elle décrit d'autres périodes.
       const r = vues.length <= 1 ? renvoi(date, ouverture, preuve, (generales ??= datesGenerales(pages, saison))) : null
       if (r) notes.push(`${prefixe}date ${libelle} ${date} = ${r} (renvoi)`)
