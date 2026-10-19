@@ -9,7 +9,7 @@ Veille automatique des arrêtés préfectoraux de chasse pour Mes Chasses.
 3. **Archive** : l'original est conservé dans un stockage objet (R2) sous une clé stable.
 4. **Lecture mécanique** : extraction du texte (natif ou OCR), détection du type d'acte, de la saison, du numéro et de la date.
 5. **File à lire** : les documents pertinents sont déposés dans une file de relecture ; les autres sont ignorés avec leur motif.
-6. **Lecture Claude** : chaque document de la file est lu par Claude (Claude Code CLI, abonnement) à partir d'un dossier minimal ; la proposition est contrôlée puis décidée en base (publiée, publiée avec note ou en attente de vérification). Contrôle des preuves aiguillé selon la page en échec : texte natif → une relance Opus au plus par document ; page scannée (OCR) → relecture Sonnet sur l'image de la page (une seconde seulement si la première diffère de la lecture texte) ; pages OCR signalées illisibles par Claude relues de même. Arrêt propre au quota de l'abonnement ou au budget de tokens du passage.
+6. **Lecture Claude** : chaque document de la file est lu par Claude, via un opencode local isolé de la machine Manta (rotation des sièges Claude) lancé la nuit par `scripts/lecture-nocturne.sh`, à partir d'un dossier minimal ; la proposition est contrôlée puis décidée en base (publiée, publiée avec note ou en attente de vérification). Contrôle des preuves aiguillé selon la page en échec : texte natif → une relance Opus au plus par document ; page scannée (OCR) → relecture Sonnet sur l'image de la page (une seconde seulement si la première diffère de la lecture texte) ; pages OCR signalées illisibles par Claude relues de même. Arrêt propre au quota de l'abonnement ou au budget de tokens du passage.
 7. **Notification** : un webhook Manta signé (HMAC-SHA256) signale les propositions à vérifier et l'arrêt au quota ou au budget de tokens ; le lundi, un bilan hebdomadaire.
 
 ## Commandes
@@ -42,7 +42,7 @@ Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête d
 - `R2_VEILLE_BUCKET`
 - `VEILLE_PROXY_URL` : proxy HTTP français. Tant qu'il est absent, la collecte planifiée (cron) est suspendue ; le lancement manuel reste possible.
 - `HIDEME_USER`, `HIDEME_PASSWORD` : compte hide.me (formule gratuite, serveur `free-fr.hideservers.net`), réservés à l'intégration hide.me à venir ; pas encore utilisés par le workflow.
-- `CLAUDE_CODE_OAUTH_TOKEN` (optionnel) : jeton de l'abonnement Claude ; absent, l'étape « Lecture Claude » est sautée.
+- `VEILLE_OPENCODE_URL`, `VEILLE_OPENCODE_PASSWORD` (mot de passe facultatif) : adresse et accès de l'opencode local utilisé par `lire-claude` ; posés par `scripts/lecture-nocturne.sh`, jamais à la main. Sans URL, `lire-claude` s'arrête (code 2).
 - `MANTA_WEBHOOK_URL`, `MANTA_WEBHOOK_SECRET` (optionnels) : webhook de notification et sa clé de signature ; absents, les notifications sont ignorées.
 
 ## Accès aux sites des préfectures

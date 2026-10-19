@@ -9,7 +9,7 @@ import { creerDepotSupabase, toutesLesPages, type DocumentEnBase } from './db.ts
 import { collecter } from './collecte.ts'
 import { lireMecaniquement } from './lecture.ts'
 import { lireAvecClaude, preparerDossier, estLisible, TOKENS_MAX } from './lecture-claude.ts'
-import { creerLecteurClaude } from './claude.ts'
+import { creerLecteurOpencode } from './lecteur-opencode.ts'
 import { chargerConsigne } from './consigne.ts'
 import { corpsNotificationLecture, notifierManta } from './manta.ts'
 import { syntheseBilan, texteBilan } from './bilan.ts'
@@ -91,7 +91,7 @@ async function notifier() {
 
 /** Lecture Claude : stdout = statistiques JSON seules (lues par le workflow), journal sur stderr ; code 0 même au quota. */
 async function lireClaude(env: Env) {
-  if (!env.claude) { console.error('CLAUDE_CODE_OAUTH_TOKEN absent : lecture Claude impossible'); process.exit(2) }
+  if (!env.opencode) { console.error('VEILLE_OPENCODE_URL absent : lecture Claude impossible'); process.exit(2) }
   const limite = limiteOpt(40)
   const echeance = echeanceBudget()
   const departements = departementsOpt()
@@ -99,7 +99,7 @@ async function lireClaude(env: Env) {
   const consigne = chargerConsigne()
   const sb = clientSupabase(env)
   const stats = await lireAvecClaude({
-    depot: creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey), archive: creerArchiveR2(env.r2), lecteur: creerLecteurClaude(env.claude.token),
+    depot: creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey), archive: creerArchiveR2(env.r2), lecteur: creerLecteurOpencode(env.opencode),
     outils: outilsPoppler, consigne, noms: await nomsDepartements(sb), fichierTemp, log: logErr,
   }, { limite, echeance, departements, budgetTokens })
   // Reste de la file (message de quota ou de budget) : information d'appoint, son échec n'invalide pas le passage.

@@ -1,5 +1,5 @@
 // Variables d'environnement du robot. Les valeurs ne sont jamais journalisées.
-export interface Env { supabaseUrl: string; serviceRoleKey: string; proxy?: string; r2: { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string }; claude?: { token: string }; manta?: { url: string; secret: string } }
+export interface Env { supabaseUrl: string; serviceRoleKey: string; proxy?: string; r2: { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string }; opencode?: { url: string; motDePasse?: string }; manta?: { url: string; secret: string } }
 function facultative(nom: string): string | undefined { return process.env[nom]?.trim() || undefined }
 function obligatoire(nom: string): string { const v = process.env[nom]?.trim(); if (!v) throw new Error(`Variable manquante : ${nom}`); return v }
 /** Webhook Manta seul (commande `notifier`, qui n'a besoin d'aucun autre secret) ; incomplet = notification désactivée. */
@@ -9,9 +9,9 @@ export function lireManta(): Env['manta'] {
 }
 export function lireEnv(): Env {
   // Facultatives : absentes = fonctionnalité désactivée (lecture Claude, alerte Manta), jamais une erreur de chargement.
-  const token = facultative('CLAUDE_CODE_OAUTH_TOKEN')
+  const url = facultative('VEILLE_OPENCODE_URL')
   return {
-    claude: token ? { token } : undefined,
+    opencode: url ? { url, motDePasse: facultative('VEILLE_OPENCODE_PASSWORD') } : undefined,
     manta: lireManta(),
     supabaseUrl: obligatoire('SUPABASE_URL'), serviceRoleKey: obligatoire('SUPABASE_SERVICE_ROLE_KEY'),
     proxy: process.env.VEILLE_PROXY_URL?.trim() || undefined,
