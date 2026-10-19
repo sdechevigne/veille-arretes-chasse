@@ -24,7 +24,8 @@ npm run typecheck    # vérification des types
 Commandes du robot (`npm run -s veille -- <commande>` ; `-s` retire l'en-tête de npm quand on lit le JSON produit) :
 
 - `collecter [--departements 24,50] [--sans-proxy] [--budget-min N]` : collecte des documents.
-- `lire [--limite N] [--budget-min N]` : lecture mécanique (texte, type, saison).
+- `lire [--limite N] [--budget-min N]` : lecture mécanique (texte, type, saison) ; dépose aussi dans R2 le PNG des pages scannées retenues (`<sha256>.page-<n>.png`), relu par le contrôle C1 de `lire-claude` (la machine de lecture Claude n'a pas poppler).
+- `images-pages [--limite N] [--budget-min N]` : rattrapage des images manquantes des documents déjà `a_lire` (`--limite` compte les documents traités) ; JSON `{ documents, images, erreurs }`, code 0 même si un document échoue.
 - `lire-claude [--limite N] [--budget-min N] [--budget-tokens N] [--departements 24,50]` : lecture Claude de la file ; statistiques JSON seules sur la sortie standard (journal sur la sortie d'erreur), tokens détaillés (`input`, `output`, `cache_creation`, `cache_read`), code 0 même à l'arrêt au quota (`arretQuota`) ou au budget de tokens (`arretBudget` : tous compteurs confondus, vérifié avant chaque document ; le workflow passe 2 000 000).
 - `dossier --id <uuid>` : affiche le dossier qui serait envoyé à Claude pour un document (mode, estimation de tokens, texte), sans appel Claude.
 - `notifier --fichier lecture-claude.json` : notification Manta des propositions à vérifier (ignorée sans webhook configuré).

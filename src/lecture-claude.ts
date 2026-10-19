@@ -2,7 +2,6 @@
 // qui contrôle (C2-C6) et décide. Raccourcis : indéterminé (aucun appel), ponctuel (objet seul), projet → signé identique.
 import type { Archive } from './r2.ts'
 import { ERREUR_MAX, PREFIXE_ERREUR_LECTURE, tentativesLecture, type Depot, type DocumentEnBase, type VersionPubliee } from './db.ts'
-import type { OutilsPdf } from './pdf.ts'
 import type { Lecteur, RequeteLecture, UsageClaude } from './lecteur.ts'
 import { decouperArticles } from './articles.ts'
 import { construireDossier } from './dossier.ts'
@@ -15,11 +14,10 @@ import type { PeriodePubliee } from './difference.ts'
 import type { Article, PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
 
 export interface DepsLectureClaude {
-  depot: Depot; archive: Archive; lecteur: Lecteur; outils: OutilsPdf
+  depot: Depot; archive: Archive; lecteur: Lecteur
   /** Consigne chargée une seule fois par l'appelant. */
   consigne: { systeme: string; schema: object }
   noms: Record<string, string>
-  fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }>
   now?: () => Date; log?: (l: string) => void
 }
 export interface OptionsLectureClaude {

@@ -1,5 +1,5 @@
 // Étage 2 : lecture mécanique des documents a_extraire (texte, OCR ciblé, découpage, classement, garde).
-import { cleArchive, type Archive } from './r2.ts'
+import { cleArchive, cleImagePage, type Archive } from './r2.ts'
 import type { Depot } from './db.ts'
 import { lirePage, qualiteDocument, type OutilsPdf } from './pdf.ts'
 import { lireSommaire, decouperParEntetes, actesChasse, pagesAOcr, type Acte } from './recueil.ts'
@@ -87,6 +87,11 @@ export async function lireMecaniquement(deps: DepsLecture, o: OptionsLecture = {
       const meta = extraireMetadonnees(texte)
       const texte_r2_key = cleArchive(doc.saison, doc.departement, doc.sha256, 'texte.json')
       await deps.archive.deposer(texte_r2_key, Buffer.from(JSON.stringify({ sha256: doc.sha256, pages: pagesRetenues, actes, pagesRetenues: retenues })), 'application/json')
+      // Images des pages scannées (OCR / OCR en échec) : la relecture C1 les lit dans R2, la machine de lecture Claude n'a pas poppler. Jamais bloquant.
+      for (const p of pagesRetenues.filter(p => p.source !== 'native')) {
+        try { await deps.archive.deposer(cleImagePage(doc.saison, doc.departement, doc.sha256, p.n), await deps.outils.imagePage(chemin, p.n), 'image/png') }
+        catch (e) { log(`${doc.departement} image page ${p.n} impossible : ${(e as Error).message}`) }
+      }
       await deps.depot.majLecture(doc.id, { type_detecte: type, numero_acte: meta.numero_acte, date_acte: meta.date_acte, objet: null, qualite_texte: qualiteDocument(pagesRetenues), pages_retenues: retenues, statut: 'a_lire', texte_r2_key })
       stats.aLire++; log(`${doc.departement} ${type} : ${titre} (${retenues.length} p.)`)
     } catch (e) {

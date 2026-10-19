@@ -1,9 +1,8 @@
 // Contrôle C1 d'une lecture Claude : preuves ancrées dans le texte, aiguillage selon la nature des pages en échec.
 // Page en texte natif : l'échec est une erreur de lecture, qu'une relance Opus unique peut corriger.
 // Page scannée (OCR, ou OCR en échec) : l'échec vient le plus souvent de l'OCR, qu'Opus ne répare pas : la page est relue sur son image.
-import type { Archive } from './r2.ts'
+import { cleImagePage, type Archive } from './r2.ts'
 import type { DocumentEnBase } from './db.ts'
-import type { OutilsPdf } from './pdf.ts'
 import type { ReponseLecture, RequeteLecture } from './lecteur.ts'
 import { levableSurImage, verifierPreuves } from './preuve.ts'
 import { comparerLectures } from './consolidation.ts'
@@ -11,7 +10,7 @@ import type { LectureClaude, PageTexte } from './types.ts'
 
 export type Lu = { sortie: LectureClaude; modele: string; relanceOpus: boolean }
 export type Appel = (req: Omit<RequeteLecture, 'systeme' | 'schema'>) => Promise<ReponseLecture>
-export interface DepsC1 { archive: Archive; outils: OutilsPdf; fichierTemp: (octets: Buffer) => Promise<{ chemin: string; liberer: () => void }> }
+export interface DepsC1 { archive: Archive }
 export interface ResultatC1 { lu: Lu; c1: { ok: boolean; details: string[] }; doubleLecture: boolean; lecturesImage: number }
 
 const PAGES_IMAGE_MAX = 6
@@ -20,13 +19,13 @@ type Panne = Extract<ReponseLecture, { ok: false }>
 export const enPanne = (r: ReponseLecture): r is Panne => !r.ok
 export const panne = (r: Panne) => `claude ${r.erreur} : ${r.message}`
 
-async function imagesPages(deps: DepsC1, r2Key: string, pages: number[]): Promise<{ page: number; png: Buffer }[]> {
-  const temp = await deps.fichierTemp(await deps.archive.lire(r2Key))
-  try {
-    const images: { page: number; png: Buffer }[] = []
-    for (const page of pages) images.push({ page, png: await deps.outils.imagePage(temp.chemin, page) })
-    return images
-  } finally { temp.liberer() }
+/** Images des pages lues dans R2 (produites par la lecture mécanique ou `images-pages`) ; première page absente sinon (rien n'est alors lu). */
+async function imagesPages(deps: DepsC1, doc: DocumentEnBase, pages: number[]): Promise<{ images: { page: number; png: Buffer }[] } | { absente: number }> {
+  const cle = (page: number) => cleImagePage(doc.saison, doc.departement, doc.sha256, page)
+  for (const page of pages) if (!(await deps.archive.existe(cle(page)))) return { absente: page }
+  const images: { page: number; png: Buffer }[] = []
+  for (const page of pages) images.push({ page, png: await deps.archive.lire(cle(page)) })
+  return { images }
 }
 
 const consigneImages = (pages: number[]) =>
@@ -63,7 +62,9 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
 
   // Lecture sur image n° 1 : identique à la lecture texte → confirmée ; sinon n° 2, qui doit concorder avec la n° 1.
   // Comparaison sur espèce, sous-type, mode et dates ; restriction et article différents ne font qu'une note.
-  const images = await imagesPages(deps, doc.r2_key, cibles)
+  const lus = await imagesPages(deps, doc, cibles)
+  if ('absente' in lus) return echec(`image de la page ${lus.absente} absente (à produire par images-pages)`)
+  const images = lus.images
   const requete = { modele: 'sonnet' as const, texte: `${dossier.texte}\n\n${consigneImages(cibles)}`, images }
   const a = await appeler(requete)
   if (enPanne(a)) return echec(`lecture sur image impossible : ${panne(a)}`)

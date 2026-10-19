@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { lireMecaniquement } from './lecture.ts'
 import { creerDepotMemoire } from './db.ts'
-import { creerArchiveMemoire } from './r2.ts'
+import { creerArchiveMemoire, cleImagePage } from './r2.ts'
 import type { OutilsPdf } from './pdf.ts'
 
 const NOMS = { '54': 'Meurthe-et-Moselle', '50': 'Manche', '36': 'Indre' }
@@ -117,5 +117,35 @@ describe('lireMecaniquement', () => {
   it('échéance large : lecture normale, arretPrecoce faux', async () => {
     const { stats } = await docTest([`PRÉFET DE MEURTHE-ET-MOSELLE\nARRÊTÉ N° 1 ouverture et clôture de la chasse 2026-2027 ${long('vu')}`])
     expect(stats.arretPrecoce).toBe(false)
+  })
+  describe('images des pages scannées', () => {
+    const SHA = 'c'.repeat(64)
+    const cle = (n: number) => cleImagePage('2026-2027', '54', SHA, n)
+    const ENTETE = `PRÉFET DE MEURTHE-ET-MOSELLE\nARRÊTÉ N° 1 ouverture et clôture de la chasse 2026-2027 ${long('vu')}`
+    // Page 1 native ; page 2 scannée (OCR) ; page 3 : natif vide et OCR en échec (source erreur).
+    const outilsScan = (imagePage: OutilsPdf['imagePage']): OutilsPdf => ({
+      async nbPages() { return 3 }, async texteNatif(_, n) { return n === 1 ? ENTETE : '' },
+      async ocrPage(_, n) { if (n === 3) throw new Error('tesseract cassé'); return `sanglier chevreuil du 01/06/2026 au 28/02/2027 ${long('x')}` }, imagePage,
+    })
+    async function lireScan(imagePage: OutilsPdf['imagePage']) {
+      const depot = creerDepotMemoire(); const archive = creerArchiveMemoire(); const journal: string[] = []
+      const r2_key = `arretes/2026-2027/54/${SHA}.pdf`; archive.objets.set(r2_key, Buffer.from('%PDF-'))
+      await depot.creerDocument({ departement: '54', saison: '2026-2027', source_id: null, url: 'https://x/a.pdf', titre: 'AP ouverture 2026-2027', sha256: SHA, r2_key, taille_octets: 5 })
+      const stats = await lireMecaniquement({ depot, archive, outils: outilsScan(imagePage), noms: NOMS, fichierTemp, log: l => journal.push(l) })
+      return { archive, journal, stats, doc: depot.etat.documents[0] as any }
+    }
+    it('pages ocr et erreur déposées en PNG à côté du texte ; page native jamais', async () => {
+      const { archive, doc, stats } = await lireScan(async (_, n) => Buffer.from(`png${n}`))
+      expect(stats).toMatchObject({ aLire: 1, erreurs: 0 }); expect(doc.statut_traitement).toBe('a_lire')
+      expect(archive.objets.get(cle(2))).toEqual(Buffer.from('png2')); expect(archive.objets.get(cle(3))).toEqual(Buffer.from('png3'))
+      expect(archive.objets.has(cle(1))).toBe(false)
+    })
+    it('échec de rendu : journalisé, jamais bloquant (texte déposé, document a_lire)', async () => {
+      const { archive, doc, journal, stats } = await lireScan(async (_, n) => { if (n === 2) throw new Error('pdftoppm cassé'); return Buffer.from(`png${n}`) })
+      expect(stats).toMatchObject({ aLire: 1, erreurs: 0 }); expect(doc.statut_traitement).toBe('a_lire')
+      expect(archive.objets.has(doc.texte_r2_key)).toBe(true)
+      expect(archive.objets.has(cle(2))).toBe(false); expect(archive.objets.has(cle(3))).toBe(true)
+      expect(journal.join('\n')).toMatch(/54 image page 2 impossible : pdftoppm cassé/)
+    })
   })
 })

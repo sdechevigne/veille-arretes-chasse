@@ -8,6 +8,7 @@ import { creerArchiveR2 } from './r2.ts'
 import { creerDepotSupabase, toutesLesPages, type DocumentEnBase } from './db.ts'
 import { collecter } from './collecte.ts'
 import { lireMecaniquement } from './lecture.ts'
+import { produireImagesPages } from './images-pages.ts'
 import { lireAvecClaude, preparerDossier, estLisible, TOKENS_MAX } from './lecture-claude.ts'
 import { creerLecteurOpencode } from './lecteur-opencode.ts'
 import { chargerConsigne } from './consigne.ts'
@@ -51,7 +52,7 @@ const limiteOpt = (defaut: number) => {
 const log = (l: string) => console.log(l)
 /** Journal sur stderr : commandes dont stdout ne porte que le JSON final (lu par le workflow). */
 const logErr = (l: string) => console.error(l)
-const USAGE = 'usage: veille <collecter|lire|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--limite N] [--budget-min N] [--budget-tokens N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
+const USAGE = 'usage: veille <collecter|lire|images-pages|lire-claude|dossier|notifier|sante|bilan|amorcer> [--departements 24,50] [--sans-proxy] [--limite N] [--budget-min N] [--budget-tokens N] [--fichier f.json] [--id uuid] [--notifier] [--etat etat/dernier-bilan.json]'
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const clientSupabase = (env: Env) => createClient(env.supabaseUrl, env.serviceRoleKey, { auth: { persistSession: false } }) as any
@@ -100,7 +101,7 @@ async function lireClaude(env: Env) {
   const sb = clientSupabase(env)
   const stats = await lireAvecClaude({
     depot: creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey), archive: creerArchiveR2(env.r2), lecteur: creerLecteurOpencode(env.opencode),
-    outils: outilsPoppler, consigne, noms: await nomsDepartements(sb), fichierTemp, log: logErr,
+    consigne, noms: await nomsDepartements(sb), log: logErr,
   }, { limite, echeance, departements, budgetTokens })
   // Reste de la file (message de quota ou de budget) : information d'appoint, son échec n'invalide pas le passage.
   let restantsALire: number | undefined
@@ -161,7 +162,7 @@ async function bilan(env: Env) {
 async function main() {
   if (commande === 'amorcer') return amorcer()
   if (commande === 'notifier') return notifier()
-  if (!['collecter', 'lire', 'lire-claude', 'dossier', 'sante', 'bilan'].includes(commande)) { console.error(USAGE); process.exit(2) }
+  if (!['collecter', 'lire', 'images-pages', 'lire-claude', 'dossier', 'sante', 'bilan'].includes(commande)) { console.error(USAGE); process.exit(2) }
   const env = lireEnv()
   if (commande === 'lire-claude') return lireClaude(env)
   if (commande === 'dossier') return dossier(env)
@@ -186,6 +187,12 @@ async function main() {
     const echeance = echeanceBudget()
     const noms = await nomsDepartements(clientSupabase(env))
     const stats = await lireMecaniquement({ depot, archive, outils: outilsPoppler, noms, fichierTemp, log }, { limite, echeance })
+    console.log(JSON.stringify(stats, null, 2)); return
+  }
+  if (commande === 'images-pages') {
+    // Rattrapage : images des pages scannées des documents déjà a_lire. JSON seul sur stdout ; une panne par document n'invalide pas le passage.
+    const stats = await produireImagesPages({ depot: creerDepotSupabase(env.supabaseUrl, env.serviceRoleKey), archive: creerArchiveR2(env.r2), outils: outilsPoppler, fichierTemp, log: logErr },
+      { limite: limiteOpt(200), echeance: echeanceBudget() })
     console.log(JSON.stringify(stats, null, 2)); return
   }
   // sante : sources à 3 échecs ou plus et documents découverts sur les 7 derniers jours (plafonnés à 1000 lignes chacun)

@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { lireAvecClaude, preparerDossier } from './lecture-claude.ts'
 import { creerDepotMemoire } from './db.ts'
-import { creerArchiveMemoire, cleArchive } from './r2.ts'
+import { creerArchiveMemoire, cleArchive, cleImagePage } from './r2.ts'
 import type { Lecteur, ReponseLecture, RequeteLecture } from './lecteur.ts'
-import type { OutilsPdf } from './pdf.ts'
 import type { PeriodePubliee } from './difference.ts'
 import type { LectureClaude, PageTexte, PeriodeLue, QualiteTexte, TypeDetecte } from './types.ts'
 
@@ -32,7 +31,7 @@ function lecteurScripte(reponses: (ReponseLecture | Error)[]): Lecteur & { reque
   return { requetes, async lire(req) { requetes.push(req); const r = file.shift(); if (!r) throw new Error('plus de réponse prévue'); if (r instanceof Error) throw r; return r } }
 }
 
-interface DocTest { type?: TypeDetecte; pages?: string[]; sources?: PageTexte['source'][]; qualite?: QualiteTexte; statut?: 'a_lire' | 'erreur' | 'propose'; erreur?: string; updated_at?: string }
+interface DocTest { sansImages?: boolean; type?: TypeDetecte; pages?: string[]; sources?: PageTexte['source'][]; qualite?: QualiteTexte; statut?: 'a_lire' | 'erreur' | 'propose'; erreur?: string; updated_at?: string }
 async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
   const depot = creerDepotMemoire(); const archive = creerArchiveMemoire(); const lecteur = lecteurScripte(reponses)
   for (const [i, d] of docs.entries()) {
@@ -42,17 +41,19 @@ async function monter(docs: DocTest[], reponses: (ReponseLecture | Error)[]) {
     const texte_r2_key = cleArchive('2026-2027', '54', sha, 'texte.json')
     const pages = (d.pages ?? AP).map((texte, j) => ({ n: j + 1, source: d.sources?.[j] ?? 'native', texte, nbDates: 0, nbEspeces: 0 }))
     archive.objets.set(texte_r2_key, Buffer.from(JSON.stringify({ sha256: sha, pages })))
+    // Images des pages scannées : déposées par la lecture mécanique (ou images-pages), lues par le C1.
+    if (!d.sansImages) for (const p of pages) if (p.source !== 'native') archive.objets.set(cleImagePage('2026-2027', '54', sha, p.n), Buffer.from(`png${p.n}`))
     await depot.majLecture(id, { type_detecte: d.type ?? 'annuel', numero_acte: null, date_acte: null, objet: null, qualite_texte: d.qualite ?? 'native', pages_retenues: pages.map(p => p.n), statut: 'a_lire', texte_r2_key })
     Object.assign(depot.etat.documents.find(x => x.id === id)!, { decouvert_le: `2026-10-0${i + 1}T00:00:00Z`, updated_at: d.updated_at ?? `2026-10-0${i + 1}T00:00:00Z` },
       d.statut && d.statut !== 'a_lire' ? { statut_traitement: d.statut, erreur: d.erreur ?? null } : {})
   }
-  const images: number[] = []; const temps: string[] = []; const liberes: string[] = []
-  const outils: OutilsPdf = { async nbPages() { return 1 }, async texteNatif() { return '' }, async ocrPage() { return '' }, async imagePage(_pdf, n) { images.push(n); return Buffer.from(`png${n}`) } }
-  const fichierTemp = async (o: Buffer) => { const chemin = `/tmp/fake-${o.toString()}`; temps.push(chemin); return { chemin, liberer: () => { liberes.push(chemin) } } }
+  // Pages relues sur image : les lectures d'images passent par l'archive.
+  const images: number[] = []; const lireArchive = archive.lire.bind(archive)
+  archive.lire = async cle => { const m = /\.page-(\d+)\.png$/.exec(cle); if (m) images.push(+m[1]); return lireArchive(cle) }
   const journal: string[] = []
-  const lancer = (o: { echeance?: Date; limite?: number; departements?: string[]; budgetTokens?: number } = {}) => lireAvecClaude({ depot, archive, lecteur, outils, consigne: CONSIGNE, noms: NOMS, fichierTemp, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
+  const lancer = (o: { echeance?: Date; limite?: number; departements?: string[]; budgetTokens?: number } = {}) => lireAvecClaude({ depot, archive, lecteur, consigne: CONSIGNE, noms: NOMS, now: () => NOW, log: l => { journal.push(l) } }, { limite: 10, ...o })
   const doc = (i: number) => depot.etat.documents[i] as any
-  return { depot, archive, lecteur, images, temps, liberes, journal, lancer, doc }
+  return { depot, archive, lecteur, images, journal, lancer, doc }
 }
 
 const ARRETE = { id: 'a1', updated_at: '2026-09-20T10:00:00+00:00', statut: 'signe', url_source: 'https://exemple.test/ap.pdf', numero_arrete: '2026/DDT/12', date_signature: '2026-05-12' }
@@ -165,7 +166,6 @@ describe('lireAvecClaude', () => {
     expect(m.lecteur.requetes[1].images).toEqual([{ page: 1, png: Buffer.from('png1') }])
     expect(m.lecteur.requetes[1].texte).toMatch(/pages? 1.*l'image fait foi/s)
     expect(m.images).toEqual([1])
-    expect(m.temps).toEqual(['/tmp/fake-%PDF-0']); expect(m.liberes).toEqual(m.temps)
     const p = m.depot.etat.propositions[0]
     expect(p.lecture).toMatchObject({ modele: 'sonnet', double_lecture: true, lectures_image: 1, relance_opus: false, usage: { input: 200, output: 100, cache_creation: 20, cache_read: 0 } })
     expect(p.c1).toEqual({ ok: true, details: [] })
@@ -298,6 +298,17 @@ describe('lireAvecClaude', () => {
     expect(p).toMatchObject({ c1: { ok: true }, lecture: { lectures_image: 1 } })
     expect(p.lecture.notes).toContain('lectures texte / image, restriction ou article différents : sanglier tous_modes 2026-06-01→2027-02-28')
     expect(p.payload.periodes.find(x => x.espece_code === 'sanglier')?.restriction_dates).toBeNull()
+  })
+
+  it('image d’une page scannée absente de R2 : C1 rouge avec le détail, aucune lecture sur image lancée', async () => {
+    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
+    const m = await monter([{ sources: ['ocr'], sansImages: true }], [ok(s)])
+    await m.lancer()
+    expect(m.lecteur.requetes).toHaveLength(1); expect(m.images).toEqual([])
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1.ok).toBe(false)
+    expect(p.c1.details).toContain('image de la page 1 absente (à produire par images-pages)')
+    expect(p.lecture).toMatchObject({ double_lecture: false, lectures_image: 0 })
   })
 
   it('pages illisibles signalées par Claude : page OCR relue en image même si C1 est bon ; page native ignorée', async () => {
@@ -500,8 +511,7 @@ describe('lireAvecClaude', () => {
 
   it('journal défaillant après une soumission réussie : document jamais marqué en erreur', async () => {
     const m = await monter([{}], [ok(sortie())])
-    const stats = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: m.lecteur, outils: {} as OutilsPdf, consigne: CONSIGNE, noms: NOMS,
-      fichierTemp: async () => { throw new Error('inutile') }, now: () => NOW, log: () => { throw new Error('journal en panne') } }, { limite: 10 })
+    const stats = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: m.lecteur, consigne: CONSIGNE, noms: NOMS, now: () => NOW, log: () => { throw new Error('journal en panne') } }, { limite: 10 })
     expect(stats).toMatchObject({ publie: 1, erreurs: 0 })
     expect(m.depot.etat.propositions).toHaveLength(1)
     expect(m.doc(0)).toMatchObject({ statut_traitement: 'propose', erreur: null })
@@ -539,8 +549,7 @@ describe('lireAvecClaude', () => {
     expect(e1.length).toBeLessThanOrEqual(2000)
     expect(e1.endsWith('(tentative 1)')).toBe(true)
     m.doc(0).updated_at = '2026-10-13T00:00:00Z'
-    const m2 = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: { async lire() { throw new Error('y'.repeat(3000)) } }, outils: {} as OutilsPdf, consigne: CONSIGNE, noms: NOMS,
-      fichierTemp: async () => { throw new Error('inutile') }, now: () => NOW }, { limite: 10 })
+    const m2 = await lireAvecClaude({ depot: m.depot, archive: m.archive, lecteur: { async lire() { throw new Error('y'.repeat(3000)) } }, consigne: CONSIGNE, noms: NOMS, now: () => NOW }, { limite: 10 })
     expect(m2.erreurs).toBe(1)
     expect((m.doc(0).erreur as string).endsWith('(tentative 2)')).toBe(true)
   })
