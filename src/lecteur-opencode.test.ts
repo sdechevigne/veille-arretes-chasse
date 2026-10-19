@@ -1,19 +1,21 @@
 import { describe, it, expect } from 'vitest'
+import type { ReponseLecture } from './lecteur.ts'
 import { creerLecteurOpencode, extraireJson, MODELES_OPENCODE } from './lecteur-opencode.ts'
 
 const SCHEMA = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', additionalProperties: false, required: ['a'], properties: { a: { type: 'integer' } } }
 const REQ = { modele: 'sonnet' as const, systeme: 'Consigne.', schema: SCHEMA, texte: 'Texte du dossier.' }
+const messageDe = (r: ReponseLecture) => (r as { message?: string }).message ?? ''
 type Appel = { url: string; init: RequestInit }
 
 // Faux fetch : enregistre les appels et, comme un vrai fetch, rejette avec `signal.reason` quand le signal est annulé.
-function fauxFetch(reponseMessage: () => Response | Promise<Response>) {
+function fauxFetch(reponseMessage: (init: RequestInit) => Response | Promise<Response>, reponseSession: () => Response = () => new Response(JSON.stringify({ id: 'ses_test' }), { status: 200 })) {
   const appels: Appel[] = []
   const f = ((url: string, init: RequestInit) => {
     appels.push({ url, init })
     const reponse = async () => {
-      if (init.method === 'POST' && url.endsWith('/session')) return new Response(JSON.stringify({ id: 'ses_test' }), { status: 200 })
+      if (init.method === 'POST' && url.endsWith('/session')) return reponseSession()
       if (init.method === 'DELETE') return new Response('true', { status: 200 })
-      return reponseMessage()
+      return reponseMessage(init)
     }
     const signal = init.signal
     if (!signal) return reponse()
@@ -85,6 +87,52 @@ describe('creerLecteurOpencode', () => {
     expect(await creerLecteurOpencode({ url: 'http://x' }, lent).lire({ ...REQ, delaiMs: 20 })).toMatchObject({ ok: false, erreur: 'timeout' })
     const ko = (async () => { throw new TypeError('fetch failed') }) as unknown as typeof fetch
     expect(await creerLecteurOpencode({ url: 'http://x' }, ko).lire(REQ)).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+})
+
+describe('creerLecteurOpencode — robustesse', () => {
+  it('délai dépassé pendant la lecture du corps de la réponse → timeout (pas cli)', async () => {
+    // Les en-têtes arrivent, mais le corps ne se termine jamais : le flux échoue à l'annulation du signal, comme un vrai fetch.
+    const corpsSansFin = (init: RequestInit) => new Response(new ReadableStream({
+      start(c) { init.signal?.addEventListener('abort', () => c.error(init.signal!.reason)) },
+    }), { status: 200 })
+    const { f, appels } = fauxFetch(corpsSansFin)
+    expect(await creerLecteurOpencode({ url: 'http://x' }, f).lire({ ...REQ, delaiMs: 20 })).toMatchObject({ ok: false, erreur: 'timeout' })
+    expect(appels.at(-1)).toMatchObject({ init: { method: 'DELETE' } })
+  })
+  it('échec de création de session (HTTP 500) → cli, aucune suppression tentée', async () => {
+    const { f, appels } = fauxFetch(() => message('{"a": 1}'), () => new Response('base indisponible', { status: 500 }))
+    const r = await creerLecteurOpencode({ url: 'http://x' }, f).lire(REQ)
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(r)).toContain('HTTP 500')
+    expect(appels).toHaveLength(1)
+  })
+  it('création de session : titre, permission « tout refuser » et signal de délai ; suppression bornée aussi', async () => {
+    const { f, appels } = fauxFetch(() => message('{"a": 1}'))
+    await creerLecteurOpencode({ url: 'http://x' }, f).lire(REQ)
+    expect(JSON.parse(String(appels[0].init.body))).toEqual({ title: 'veille-arretes', permission: [{ permission: '*', pattern: '*', action: 'deny' }] })
+    expect(appels[0].init.signal).toBeDefined()
+    expect(appels.at(-1)!.init.signal).toBeDefined()
+  })
+  it('statut HTTP 429 → quota ; un « 429 » dans le corps d’une erreur 5xx → cli', async () => {
+    expect(await creerLecteurOpencode({ url: 'http://x' }, fauxFetch(() => new Response('trop de requêtes', { status: 429 })).f).lire(REQ)).toMatchObject({ ok: false, erreur: 'quota' })
+    expect(await creerLecteurOpencode({ url: 'http://x' }, fauxFetch(() => new Response('requête 4290 échouée', { status: 502 })).f).lire(REQ)).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(await creerLecteurOpencode({ url: 'http://x' }, fauxFetch(() => new Response('id 429 introuvable', { status: 500 })).f).lire(REQ)).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+  it('réponse sans « info » (ou sans « parts ») → cli avec message clair', async () => {
+    const sansInfo = await creerLecteurOpencode({ url: 'http://x' }, fauxFetch(() => new Response(JSON.stringify({ parts: [] }), { status: 200 })).f).lire(REQ)
+    expect(sansInfo).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(sansInfo)).toContain('info')
+    expect(await creerLecteurOpencode({ url: 'http://x' }, fauxFetch(() => new Response(JSON.stringify({ info: {} }), { status: 200 })).f).lire(REQ)).toMatchObject({ ok: false, erreur: 'cli' })
+  })
+  it('le mot de passe n’apparaît jamais dans un message d’erreur (corps de réponse ou erreur réseau)', async () => {
+    const pw = 'mdp-secret-XYZ-123'
+    const echo = await creerLecteurOpencode({ url: 'http://x', motDePasse: pw }, fauxFetch(() => new Response(`refusé pour ${pw}`, { status: 500 })).f).lire(REQ)
+    expect(echo).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(echo)).not.toContain(pw)
+    const ko = (async () => { throw new TypeError(`connexion refusée (${pw})`) }) as unknown as typeof fetch
+    const reseau = await creerLecteurOpencode({ url: 'http://x', motDePasse: pw }, ko).lire(REQ)
+    expect(messageDe(reseau)).not.toContain(pw)
   })
 })
 
