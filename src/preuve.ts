@@ -17,7 +17,7 @@ const SEUIL_NOMBRE_ALTERE = 0.9
 const pct = (x: number) => x.toFixed(2).replace('.', ',')
 
 export type NatureEchec = 'page_introuvable' | 'citation_introuvable' | 'nombre_altere' | 'espece_sans_motif' | 'espece_absente' | 'date_absente'
-  | 'extrait_introuvable' | 'extraits_eloignes'
+  | 'extrait_introuvable' | 'extraits_eloignes' | 'extrait_ambigu'
 /** Échec C1 d'un élément, avec la page déclarée par sa preuve (aiguillage texte natif / scan) ; `score` = similarité
  *  de la meilleure fenêtre pour une citation non retrouvée. */
 export interface EchecPreuve { page: number; detail: string; nature: NatureEchec; score?: number }
@@ -26,8 +26,8 @@ export interface VerificationPreuves {
   /** Page déclarée de chaque élément en échec, triée, sans doublon (page inexistante comprise). */
   pagesEnEchec: number[]
   echecs: EchecPreuve[]
-  /** Dates admises par renvoi aux dates générales (à reporter dans les notes de la lecture). */
-  renvois: string[]
+  /** Dates admises par renvoi aux dates générales, espèces prouvées par un extrait (notes de la lecture si C1 est vert). */
+  notes: string[]
 }
 
 /** Écart maximal (caractères du texte de page normalisé) entre le début de la citation et celui d'un extrait (Ruling R43). */
@@ -37,8 +37,8 @@ export const FENETRE_DATES_GENERALES = 200
 // Expressions sur texte normalisé (accents retirés).
 const RE_OUVERTURE_GENERALE = /\bouverture generale\b/
 const RE_CLOTURE_GENERALE = /\b(?:cloture|fermeture) generale\b/
-const RE_VEILLE = /\bveille\b/
-const RE_LENDEMAIN = /\blendemain\b/
+// « la veille de l'ouverture générale », « le lendemain de la clôture générale » : rattaché à l'expression (Ruling R48).
+const RE_RELATIF = /\b(veille|lendemain) de (?:la |l' ?|l )?(ouverture|cloture|fermeture) generale\b/g
 
 export interface DatesGenerales { ouvertures: Set<string>; clotures: Set<string> }
 
@@ -69,27 +69,35 @@ const RENVOIS = [
 /** Renvoi de la preuve (texte normalisé) qui justifie une date absente, ou null : une date d'ouverture renvoie à l'ouverture
  *  générale, une date de fermeture à la clôture générale ; « la veille de » / « le lendemain de » l'une ou l'autre décale d'un jour. */
 function renvoi(date: string, ouverture: boolean, preuve: string, generales: DatesGenerales): string | null {
-  for (const r of RENVOIS) {
-    if (!r.motif.test(preuve)) continue
-    const dates = generales[r.ensemble]
-    if ((r.ensemble === 'ouvertures') === ouverture && dates.has(date)) return r.nom
-    if (RE_VEILLE.test(preuve) && dates.has(decaler(date, 1))) return `veille de ${r.defini}`
-    if (RE_LENDEMAIN.test(preuve) && dates.has(decaler(date, -1))) return `lendemain de ${r.defini}`
+  for (const r of RENVOIS) if ((r.ensemble === 'ouvertures') === ouverture && r.motif.test(preuve) && generales[r.ensemble].has(date)) return r.nom
+  for (const m of preuve.matchAll(RE_RELATIF)) {
+    const r = RENVOIS[m[2] === 'ouverture' ? 0 : 1]
+    if (generales[r.ensemble].has(decaler(date, m[1] === 'veille' ? 1 : -1))) return `${m[1]} de ${r.defini}`
   }
   return null
+}
+
+/** Pourquoi un extrait ne peut pas prouver l'espèce (Ruling R47), ou null : il doit précéder la citation sans qu'une autre
+ *  espèce s'intercale (sinon l'espèce peut venir de la ligne voisine d'un tableau). Positions sur la page normalisée. */
+function ambiguite(page: string, extrait: { debut: number; fin: number }, citation: number, espece: string): string | null {
+  if (extrait.debut > citation) return 'après la citation'
+  const entre = page.slice(extrait.fin, citation)
+  const autre = Object.entries(ESPECES_RECHERCHE).find(([code, re]) => code !== espece && re.test(entre))
+  return autre ? `séparé de la citation par une autre espèce (${autre[0]})` : null
 }
 
 /** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
 export const SEUIL_CITATION_ABIMEE = 0.5
 
 /** Échec qu'un texte OCR abîmé peut expliquer, donc levable par une lecture sur image concordante.
- *  Un extrait éloigné de la citation ne l'est jamais (assemblage possible de morceaux sans rapport). */
+ *  Un extrait éloigné ou ambigu ne l'est jamais (assemblage possible de morceaux sans rapport). Pour un extrait court
+ *  (nom d'espèce), le seuil de similarité 0,5 est faible : la levée repose alors sur la concordance des lectures sur image. */
 export const levableSurImage = (e: EchecPreuve): boolean =>
   e.nature === 'espece_absente' || e.nature === 'nombre_altere' || e.nature === 'date_absente'
   || ((e.nature === 'citation_introuvable' || e.nature === 'extrait_introuvable') && (e.score ?? 0) >= SEUIL_CITATION_ABIMEE)
 
 export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], saison: string): VerificationPreuves {
-  const echecs: EchecPreuve[] = [], renvois: string[] = []
+  const echecs: EchecPreuve[] = [], notes: string[] = []
   let generales: DatesGenerales | undefined
 
   // Vérifie page, citation, extraits et espèce ; renvoie le texte de la preuve (citation et extraits retrouvés près d'elle)
@@ -106,19 +114,29 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
       echouer(altere ? 'nombre_altere' : 'citation_introuvable', `${prefixe}${altere ? 'citation introuvable ou nombre altéré' : 'citation introuvable'} (similarité ${pct(trouvee.score)})`, trouvee.score)
       return null
     }
-    // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien.
+    // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien. Un extrait qui apporte
+    // l'espèce absente de la citation doit en plus la précéder sans autre espèce intercalée.
+    const motif = motifEspece(espece, sousType)
+    const especeCitee = !!motif?.test(citation)
+    const pageNorm = normaliser(page.texte)
     const preuve = [citation]
+    let especeParExtrait: string | undefined
     for (const extrait of extraits) {
       const e = trouverCitation(extrait, page.texte)
       if (!e.ok) { echouer('extrait_introuvable', `${prefixe}extrait « ${extrait} » introuvable (similarité ${pct(e.score)})`, e.score); continue }
       const ecart = Math.abs(e.debut - trouvee.debut)
       if (ecart > DISTANCE_MAX_FRAGMENTS) { echouer('extraits_eloignes', `${prefixe}extrait « ${extrait} » trop éloigné de la citation (${ecart} caractères)`); continue }
+      if (motif && !especeCitee && motif.test(extrait)) {
+        const raison = ambiguite(pageNorm, { debut: e.debut, fin: e.debut + normaliser(extrait).length }, trouvee.debut, espece)
+        if (raison) { echouer('extrait_ambigu', `${prefixe}extrait « ${extrait} » ${raison}`); continue }
+        especeParExtrait ??= extrait
+      }
       preuve.push(extrait)
     }
     const texte = preuve.join(' ')
-    const motif = motifEspece(espece, sousType)
     if (!motif) echouer('espece_sans_motif', `${prefixe}espèce sans motif de recherche`)
     else if (!motif.test(texte)) echouer('espece_absente', `${prefixe}espèce absente de la citation`)
+    else if (especeParExtrait !== undefined) notes.push(`${prefixe}espèce prouvée par extrait « ${especeParExtrait} »`)
     return texte
   }
 
@@ -131,13 +149,14 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     const prefixe = `période ${i + 1} (${p.espece_code}) : `
     for (const [libelle, date, ouverture] of [["d'ouverture", p.date_ouverture, true], ['de fermeture', p.date_fermeture, false]] as const) {
       if (vues.includes(annee_deduite ? date.slice(5) : date)) continue
-      const r = renvoi(date, ouverture, preuve, (generales ??= datesGenerales(pages, saison)))
-      if (r) renvois.push(`${prefixe}date ${libelle} ${date} = ${r} (renvoi)`)
+      // Renvoi admis seulement si la preuve porte au plus une date littérale (Ruling R48) : au-delà, elle décrit d'autres périodes.
+      const r = vues.length <= 1 ? renvoi(date, ouverture, preuve, (generales ??= datesGenerales(pages, saison))) : null
+      if (r) notes.push(`${prefixe}date ${libelle} ${date} = ${r} (renvoi)`)
       else echecs.push({ page, nature: 'date_absente', detail: `${prefixe}date ${libelle} ${date} absente de la citation` })
     }
   })
   lecture.suppressions.forEach((s, i) => { verifierCitation(`suppression ${i + 1}`, s.espece_code, s.sous_type, s.citation, s.page, s.extraits) })
 
   const tri = (x: Iterable<number>) => [...new Set(x)].sort((a, b) => a - b)
-  return { ok: echecs.length === 0, details: echecs.map(e => e.detail), pagesEnEchec: tri(echecs.map(e => e.page)), echecs, renvois }
+  return { ok: echecs.length === 0, details: echecs.map(e => e.detail), pagesEnEchec: tri(echecs.map(e => e.page)), echecs, notes }
 }

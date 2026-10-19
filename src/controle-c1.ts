@@ -49,9 +49,9 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
   // Pages natives déclarées illisibles : texte exact, rien à relire en image (tracé).
   for (const n of new Set(lu.sortie.pages_illisibles ?? [])) if (sourceDe(n) === 'native') notes.push(`page ${n} déclarée illisible (texte natif), non relue en image`)
   let lecturesImage = 0
-  // Lecture retenue : ses dates admises par renvoi aux dates générales sont tracées dans les notes.
+  // C1 vert : renvois aux dates générales et espèces prouvées par un extrait de la lecture retenue sont tracés dans les notes.
   const resultat = (ok: boolean, details: string[]): ResultatC1 => {
-    notes.push(...verifierPreuves(lu.sortie, pages, doc.saison).renvois)
+    if (ok) notes.push(...verifierPreuves(lu.sortie, pages, doc.saison).notes)
     return { lu, c1: { ok, details }, doubleLecture: lecturesImage > 0, lecturesImage }
   }
   // Échec persistant sur une page native : C1 reste rouge quoi qu'il arrive, aucune relecture sur image (dépense inutile).

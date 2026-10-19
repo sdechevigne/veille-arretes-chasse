@@ -42,12 +42,13 @@ describe('chargerConsigne', () => {
     expect(systeme).toMatch(/`pages_illisibles`/)
   })
 
-  it('preuve composée : `extraits` (0 à 3 extraits de 8 à 200 caractères) sur chaque preuve et chaque suppression, décrit dans la consigne', () => {
-    const extraits = { type: 'array', maxItems: 3, items: { type: 'string', minLength: 8, maxLength: 200 } }
+  it('preuve composée : `extraits` (0 à 3 extraits de 4 à 200 caractères) sur chaque preuve et chaque suppression, décrit dans la consigne', () => {
+    const extraits = { type: 'array', maxItems: 3, items: { type: 'string', minLength: 4, maxLength: 200 } }
     expect(periode.preuve.properties.extraits).toEqual(extraits)
     expect(suppression.extraits).toEqual(extraits)
     expect(systeme).toMatch(/`extraits`/)
     expect(systeme).toMatch(/ouverture générale/)
+    expect(systeme).toMatch(/seul nom de l'espèce/)
   })
 
   it('la consigne cite chaque espèce, chaque mode et chaque sous-type', () => {

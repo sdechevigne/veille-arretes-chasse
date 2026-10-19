@@ -300,6 +300,18 @@ describe('lireAvecClaude', () => {
     expect(p.lecture.notes).toContain('période 1 (chevreuil) : date de fermeture 2027-02-28 = clôture générale (renvoi)')
   })
 
+  it('C1 rouge : les notes de renvoi ne sont pas ajoutées', async () => {
+    const art2 = 'Article 2 : Le chevreuil peut être chassé du 1er juin 2026 à la clôture générale.'
+    const pages = [[ENTETE, 'Article 1 : La clôture générale de la chasse est fixée au 28 février 2027.', art2, 'Fait à Nancy, le 12 mai 2026'].join('\n')]
+    const faux = sortie({ periodes: [{ ...P2, mode_chasse: 'tous_modes', preuve: preuve('Le chevreuil peut être chassé du 1er juin 2026 à la clôture générale') },
+      { ...P1, preuve: preuve('Le sanglier est interdit toute la saison hivernale sur tout le territoire départemental') }] })
+    const m = await monter([{ pages }], [ok(faux), ok(faux, 'opus')])
+    await m.lancer()
+    const p = m.depot.etat.propositions[0]
+    expect(p.c1.ok).toBe(false)
+    expect(p.lecture.notes).not.toContain('(renvoi)')
+  })
+
   it('texte / image : seule la restriction diffère → concordantes, différence notée', async () => {
     const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
     const image = sortie({ periodes: [{ ...P1, restriction_dates: 'samedi et dimanche' }, s.periodes[1]] })
