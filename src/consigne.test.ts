@@ -51,6 +51,12 @@ describe('chargerConsigne', () => {
     expect(systeme).toMatch(/seul nom de l'espèce/)
   })
 
+  it('`extraits` réservé à ce qui manque (espèce, date, renvoi), jamais le mode, une restriction ou un titre (R54)', () => {
+    expect(systeme).toMatch(/`extraits` sert UNIQUEMENT à apporter ce qui manque à la citation/)
+    expect(systeme).toMatch(/Jamais le mode de chasse, une restriction ou un titre/)
+    expect(systeme).toMatch(/Si la ligne du tableau contient tout, cite la ligne entière et laisse `extraits: \[\]`/)
+  })
+
   it('la consigne cite chaque espèce, chaque mode et chaque sous-type', () => {
     for (const mot of [...ESPECES, ...MODES, ...SOUS_TYPES]) expect(systeme).toMatch(new RegExp(`\\b${mot}\\b`))
   })

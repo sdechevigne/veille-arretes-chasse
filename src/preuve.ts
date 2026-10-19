@@ -1,7 +1,7 @@
 // Contrôle C1 : chaque période (ou suppression) lue par Claude doit être appuyée par une citation exacte du texte,
 // portant l'espèce et les deux dates, complétée au besoin d'extraits voisins de la même page (arrêtés en tableau).
 // Une date absente de la preuve n'est admise que par un renvoi aux dates générales écrites dans l'arrêté. Module pur.
-import { datesDe, datesPositionnees, premierePlage } from './dates.ts'
+import { compterDatesLarges, datesDe, datesPositionnees, premierePlage } from './dates.ts'
 import { ESPECES_RECHERCHE } from './lexique.ts'
 import { normaliser, trouverCitation } from './texte.ts'
 import type { LectureClaude, PageTexte } from './types.ts'
@@ -170,6 +170,28 @@ function preuveComposee(page: string, citation: Fragment, extraits: Fragment[], 
   return { ambigus, dates: uniques(retenues), ecartees, renvois: [...renvois.filter(v => valide(occ, v)).map(v => vu(v)), ...ecartes] }
 }
 
+/** Extrait situé à son occurrence exacte la plus proche du début de la citation (Ruling R54 ; à égalité, la première) ; sans
+ *  occurrence exacte, recherche tolérante de trouverCitation. Positions sur la page normalisée. La citation, elle, garde
+ *  sa première occurrence (trouverCitation). */
+function situerExtrait(extrait: string, pageNormalisee: string, texte: string, debutCitation: number): { ok: boolean; score: number; debut: number } {
+  const e = normaliser(extrait)
+  let meilleur = -1
+  for (let i = e ? pageNormalisee.indexOf(e) : -1; i >= 0; i = pageNormalisee.indexOf(e, i + 1))
+    if (meilleur < 0 || Math.abs(i - debutCitation) < Math.abs(meilleur - debutCitation)) meilleur = i
+  return meilleur >= 0 ? { ok: true, score: 1, debut: meilleur } : trouverCitation(extrait, texte)
+}
+
+// Mots d'un renvoi aux dates générales, même isolés : la queue d'une cellule coupée (« générale ») n'est pas un extrait
+// inutile, elle reste jugée par la règle de ligne (R53 : extrait_ambigu).
+const RE_MOT_RENVOI = /\b(?:ouvertures?|clotures?|fermetures?|generales?|veille|lendemain)\b/
+
+/** Extrait inutile (Ruling R54) : texte normalisé sans aucune espèce (toutes espèces, sika compris), sans date et sans mot de
+ *  renvoi (mode de chasse, restriction, titre). Une date écrite hors saison (compterDatesLarges) suffit à le garder : elle est
+ *  suspecte, pas inutile. */
+const extraitInutile = (t: string, saison: string): boolean =>
+  !RE_SIKA.test(t) && !Object.values(ESPECES_RECHERCHE).some(re => re.test(t))
+  && !datesPositionnees(t, saison).length && !compterDatesLarges(t) && !RE_MOT_RENVOI.test(t)
+
 /** Seuil sous lequel une citation non retrouvée est jugée inventée (et non abîmée par l'OCR). */
 export const SEUIL_CITATION_ABIMEE = 0.5
 
@@ -203,10 +225,13 @@ export function verifierPreuves(lecture: LectureClaude, pages: PageTexte[], sais
     // Extraits : retrouvés sur la même page, près de la citation ; un extrait en échec ne prouve rien.
     const motif = motifEspece(espece, sousType)
     const fragment = (texte: string, debut: number): Fragment => ({ texte, debut, fin: debut + normaliser(texte).length })
+    const pageNormalisee = normaliser(page.texte)
     const retenus: Fragment[] = []
     for (const extrait of extraits) {
-      const e = trouverCitation(extrait, page.texte)
+      const e = situerExtrait(extrait, pageNormalisee, page.texte, trouvee.debut)
       if (!e.ok) { echouer('extrait_introuvable', `${prefixe}extrait « ${extrait} » introuvable (similarité ${pct(e.score)})`, e.score); continue }
+      // Extrait inutile (Ruling R54) : ni espèce, ni date, ni mot de renvoi ; il ne prouve rien et n'est pas compté.
+      if (extraitInutile(normaliser(extrait), saison)) { notes.push(`${prefixe}extrait « ${extrait} » sans espèce, date ni renvoi, ignoré`); continue }
       const ecart = Math.abs(e.debut - trouvee.debut)
       if (ecart > DISTANCE_MAX_FRAGMENTS) { echouer('extraits_eloignes', `${prefixe}extrait « ${extrait} » trop éloigné de la citation (${ecart} caractères)`); continue }
       retenus.push(fragment(extrait, e.debut))
