@@ -40,17 +40,18 @@ fin() {
 trap fin EXIT
 trap 'exit 143' TERM INT   # arrêt par systemd (délai dépassé) : passe aussi par fin()
 
-# Code à jour (clone de déploiement, avance rapide seulement). Une panne réseau ou un clone divergé ne coupe pas la nuit :
-# on lit avec le code déjà présent. Dépendances réinstallées si le verrou a changé.
+# Code à jour (clone de déploiement, avance rapide seulement). Une panne réseau (fetch borné à 60 s) ou un clone divergé ne
+# coupe pas la nuit : on lit avec le code déjà présent. Dépendances réinstallées si le verrou a changé, sans script
+# d'installation (aucun code de paquet exécuté à l'installation ; tsx / esbuild fonctionnent sans, vérifié sur vm-test).
 ETAPE="mise à jour du code"
-if ! { git -C "$ROBOT" fetch -q origin main && git -C "$ROBOT" merge -q --ff-only origin/main; }; then
+if ! { timeout 60 git -C "$ROBOT" fetch -q origin main && git -C "$ROBOT" merge -q --ff-only origin/main; }; then
   echo "avertissement : mise à jour du code impossible, passage avec le code déjà présent" >&2
 fi
 ETAPE="installation des dépendances (npm ci)"
 mkdir -p "$ETAT"
 verrou=$(sha256sum "$ROBOT/package-lock.json" | cut -d' ' -f1)
 if [ "$(cat "$ETAT/verrou" 2>/dev/null)" != "$verrou" ]; then
-  (cd "$ROBOT" && npm ci --silent)
+  (cd "$ROBOT" && npm ci --silent --ignore-scripts)
   echo "$verrou" > "$ETAT/verrou"
 fi
 
@@ -95,7 +96,7 @@ npm run -s veille -- lire-claude --limite "${VEILLE_LIMITE:-40}" ${VEILLE_DEPART
 if [ "$rc" -eq 0 ]; then
   # Notification de fin de lecture ; un fichier illisible donne « résultat illisible » (jamais le silence).
   NOTIFIE=1
-  a_notifier=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(s.enAttente>0||s.sansLecture>0||s.erreurs>0||s.arretQuota||s.arretBudget?"oui":"non")' "$SORTIE" 2>/dev/null || echo oui)
+  a_notifier=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(s.enAttente>0||s.sansLecture>0||s.erreurs>0||s.attenteImages>0||s.arretQuota||s.arretBudget?"oui":"non")' "$SORTIE" 2>/dev/null || echo oui)
   if [ "$a_notifier" = oui ]; then npm run -s veille -- notifier --fichier "$SORTIE" || true; fi
 else
   # lire-claude a planté : le passage est notifié en échec par fin(), le code d'échec est conservé pour systemd.

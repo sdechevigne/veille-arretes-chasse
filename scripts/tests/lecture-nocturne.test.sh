@@ -47,7 +47,7 @@ mkdir -p "$RACINE/bin"
 cat > "$RACINE/bin/npm" <<'SH'
 #!/usr/bin/env bash
 case "$1" in
-  ci) [ "${FAKE_NPM_CI:-}" = echec ] && exit 1; exit 0 ;;
+  ci) echo "ci $*" >> "$APPELS"; [ "${FAKE_NPM_CI:-}" = echec ] && exit 1; exit 0 ;;
   run)
     cmd=$5
     echo "$cmd $*" >> "$APPELS"
@@ -58,6 +58,7 @@ case "$1" in
         echec) echo "plantage" >&2; exit 1 ;;
         calme) echo '{"enAttente":0,"sansLecture":0,"erreurs":0,"arretQuota":false,"arretBudget":false}' ;;
         actif) echo '{"enAttente":2,"sansLecture":0,"erreurs":0,"arretQuota":false,"arretBudget":false}' ;;
+        images) echo '{"enAttente":0,"sansLecture":0,"erreurs":0,"attenteImages":1,"arretQuota":false,"arretBudget":false}' ;;
       esac
     fi ;;
 esac
@@ -104,11 +105,17 @@ verifie "mot de passe transmis à lire-claude" '[ ! -e "$RACINE/appels.erreurs" 
 verifie "ligne invalide signalée" 'grep -q "ligne ignorée" "$D/err"'
 verifie "curl appelé, sans identifiants dans les arguments" '[ -s "$RACINE/appels.curl" ] && ! grep -qE "opencode:|[Pp]assword" "$RACINE/appels.curl"'
 verifie "fichier de passage écrit" 'ls "$D"/etat/passages/*.json >/dev/null 2>&1'
+verifie "npm ci sans scripts d'installation" 'grep -q "^ci ci --silent --ignore-scripts" "$RACINE/appels"'
 
 echo "# 2. passage avec propositions : notifier appelé, code 0"
 preparer actif; lancer actif FAKE_LIRE=actif
 verifie "code 0" '[ "$RC" = 0 ]'
 verifie "notifier appelé sur le fichier du passage" 'grep -q "^notifier .*--fichier .*passages/.*\.json" "$RACINE/appels"'
+
+echo "# 2 bis. documents en attente d'images : notifier appelé"
+preparer images; lancer images FAKE_LIRE=images
+verifie "code 0" '[ "$RC" = 0 ]'
+verifie "notifier appelé" 'grep -q "^notifier .*--fichier" "$RACINE/appels"'
 
 echo "# 3. lire-claude plante : notification d'échec, code d'échec conservé"
 preparer plantage; lancer plantage FAKE_LIRE=echec
@@ -124,6 +131,18 @@ verifie "webhook : étape npm ci" 'dernier_webhook | grep -q "en échec : instal
 echo "# 5. git fetch impossible : avertissement, la nuit continue"
 preparer fetch; rm -rf "$D/origin"; lancer fetch FAKE_LIRE=calme
 verifie "code 0" '[ "$RC" = 0 ]'
+verifie "avertissement" 'grep -q "mise à jour du code impossible" "$D/err"'
+verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
+
+echo "# 5 bis. git fetch bloqué : coupé par timeout 60, la nuit continue"
+preparer fetchbloque
+cat > "$RACINE/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+echo "$1" > "$APPELS.timeout"; exit 124
+SH
+chmod +x "$RACINE/bin/timeout"; lancer fetchbloque FAKE_LIRE=calme; rm -f "$RACINE/bin/timeout"
+verifie "code 0" '[ "$RC" = 0 ]'
+verifie "fetch borné à 60 s" '[ "$(cat "$RACINE/appels.timeout" 2>/dev/null)" = 60 ]'
 verifie "avertissement" 'grep -q "mise à jour du code impossible" "$D/err"'
 verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
 
