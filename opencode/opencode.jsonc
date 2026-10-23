@@ -5,6 +5,9 @@
   // manta-claude-max (abonnement Claude sans clé + rotation des sièges Manta), copié depuis ~/.config/opencode/plugins à
   // chaque passage. Ne pas mettre « steps » : à la dernière étape, opencode ajoute un message assistant final que les
   // modèles récents refusent (« assistant message prefill »).
+  // Instance figée : jamais de mise à jour automatique (aussi OPENCODE_DISABLE_AUTOUPDATE=1 au lancement), aucun partage.
+  "update": "disable",
+  "share": "disabled",
   "mcp": { "servers": {} },
   "snapshots": false,
   "agents": {

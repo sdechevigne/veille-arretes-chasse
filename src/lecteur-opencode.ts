@@ -70,7 +70,13 @@ export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetc
     const texte = `${e.type ?? 'erreur'} ${e.message ?? ''}`
     return e.status === 429 || estQuota(texte) ? echec('quota', texte) : echec('cli', texte)
   }
-  const appeler = (chemin: string, init: RequestInit) => fetchImpl(`${base}${chemin}`, { ...init, headers: entetes })
+  // Une route disparue (API V2 encore expérimentale par endroits) n'échoue pas : opencode y sert son application web
+  // (HTML, code 200). Toute réponse HTML est donc refusée, quelle que soit la route.
+  const appeler = async (chemin: string, init: RequestInit) => {
+    const r = await fetchImpl(`${base}${chemin}`, { ...init, headers: entetes })
+    if (/text\/html/i.test(r.headers.get('content-type') ?? '')) throw new Error(`route opencode inattendue (HTML) : ${chemin.split('?')[0]}`)
+    return r
+  }
 
   return {
     async lire(req) {
@@ -84,7 +90,8 @@ export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetc
         session = (await s.json() as { data: { id: string } }).data.id
         etape = 'pose de la consigne'
         const c = await appeler(`/api/experimental/session/${session}/instructions/entries/consigne`, { method: 'PUT', body: JSON.stringify({ value: consigneSysteme(req) }), signal: AbortSignal.timeout(DELAI_SESSION_MS) })
-        if (!c.ok) return echec('cli', `pose de la consigne : HTTP ${c.status} ${await c.text()}`)
+        // Code exact relevé sur la V2 : tout autre succès laisserait douter que la consigne (et le schéma) soient posés.
+        if (c.status !== 204) return echec('cli', `pose de la consigne : HTTP ${c.status} ${await c.text()}`)
         etape = 'lecture'
         // Un seul signal pour les deux envois possibles (lecture + relance corrective) : `delaiMs` couvre l'ensemble, la relance n'a que l'échéance restante.
         // Il couvre aussi la lecture des corps : un signal expiré pendant `text()` est rapporté par le `catch` ci-dessous.
@@ -98,22 +105,25 @@ export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetc
           const liste = (JSON.parse(brut) as { data?: Message[] }).data
           if (!Array.isArray(liste)) throw new Error('liste des messages opencode sans « data »')
           const i = liste.findIndex(m => m.id === idConsigne)
+          // Absent d'une page incomplète : pas encore enregistré. Absent d'une page pleine : hors de portée, attendre ne servirait à rien.
+          if (i < 0 && liste.length >= MESSAGES_LUS) throw new Error(`message de la consigne hors des ${MESSAGES_LUS} derniers messages de la session`)
           return i < 0 ? null : liste.slice(0, i).reverse()
         }
 
         const envoi = async (consigne: { text: string; files?: object[] }): Promise<Envoi> => {
+          // Dès l'envoi, une exécution peut avoir démarré : un délai dépassé pendant l'envoi doit aussi l'interrompre.
+          auRepos = false
           const r = await appeler(`/api/session/${session}/prompt`, { method: 'POST', body: JSON.stringify(consigne), signal })
           const brut = await r.text()
           if (!r.ok) return { echec: echec(r.status === 429 ? 'quota' : 'cli', `HTTP ${r.status} ${brut}`) }
           const idConsigne = (JSON.parse(brut) as { data?: { id?: string } }).data?.id
           if (!idConsigne) return { echec: echec('cli', 'envoi accepté sans identifiant de message') }
-          auRepos = false
           let suite: Message[]
           for (;;) {
             // Attente bloquante par tranches : entre deux tranches, une limite d'usage en cours de nouvelle tentative est repérée tout de suite.
             const w = await appeler(`/api/experimental/session/${session}/wait`, { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(tranche)]) })
               .catch((e) => { if (signal.aborted || !estDelai(e)) throw e; return null })
-            if (w && !w.ok) return { echec: echec('cli', `attente de la réponse : HTTP ${w.status} ${await w.text()}`) }
+            if (w && w.status !== 204) return { echec: echec('cli', `attente de la réponse : HTTP ${w.status} ${await w.text()}`) }
             const apres = await messagesApres(idConsigne)
             if (apres?.some(m => m.type === 'idle')) { suite = apres; break }
             const tentative = apres?.filter(m => m.type === 'assistant').at(-1)?.retry?.error

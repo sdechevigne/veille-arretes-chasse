@@ -23,7 +23,7 @@ const QUOTA = { type: 'provider.rate-limit', message: 'rate_limit_error', status
 
 // Faux serveur opencode V2 : enregistre les appels et, comme un vrai fetch, rejette avec `signal.reason` quand le
 // signal est annulé. Les messages d'un tour n'apparaissent qu'à l'attente (POST …/wait), comme une exécution réelle.
-function fauxOpencode(tours: Tour[], opts: { session?: () => Response; consigne?: () => Response; precoce?: number } = {}) {
+function fauxOpencode(tours: Tour[], opts: { session?: () => Response; consigne?: () => Response; precoce?: number; html?: (chemin: string) => boolean } = {}) {
   const appels: Appel[] = []
   const messages: Msg[] = []
   let n = 0, id = 0, enCours: Msg[] | 'bloque' | null = null, precoce = opts.precoce ?? 0
@@ -34,6 +34,8 @@ function fauxOpencode(tours: Tour[], opts: { session?: () => Response; consigne?
     appels.push({ url, init })
     const chemin = url.replace(/^https?:\/\/[^/]+/, '')
     const reponse = async (): Promise<Response> => {
+      // Route disparue : la V2 sert l'application web (HTML, code 200) sur toute route inconnue.
+      if (opts.html?.(chemin)) return new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } })
       if (init.method === 'POST' && chemin === '/api/session') return opts.session?.() ?? json({ data: { id: 'ses_test', title: 'veille-arretes' } })
       if (init.method === 'PUT' && chemin.includes('/instructions/entries/')) return opts.consigne?.() ?? new Response(null, { status: 204 })
       if (init.method === 'DELETE') return new Response(null, { status: 204 })
@@ -178,6 +180,40 @@ describe('creerLecteurOpencode — attente de la réponse', () => {
 })
 
 describe('creerLecteurOpencode — robustesse', () => {
+  it('route de la consigne servie en HTML (route disparue, code 200) → cli explicite, aucun envoi', async () => {
+    const { f, appels } = fauxOpencode([() => reussi('{"a": 1}')], { html: c => c.includes('/instructions/entries/') })
+    const r = await lecteur(f).lire(REQ)
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(r)).toContain('route opencode inattendue (HTML) : /api/experimental/session/ses_test/instructions/entries/consigne')
+    expect(prompts(appels)).toHaveLength(0)
+    expect(appels.at(-1)).toMatchObject({ init: { method: 'DELETE' } })
+  })
+  it('consigne acceptée avec un autre code que 204 → cli', async () => {
+    const { f, appels } = fauxOpencode([() => reussi('{"a": 1}')], { consigne: () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }) })
+    expect(await lecteur(f).lire(REQ)).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(prompts(appels)).toHaveLength(0)
+  })
+  it('attente servie en HTML (route disparue, code 200) → cli explicite, pas timeout', async () => {
+    const { f } = fauxOpencode([() => reussi('{"a": 1}')], { html: c => c.endsWith('/wait') })
+    const r = await lecteur(f).lire({ ...REQ, delaiMs: 2_000 })
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(r)).toContain('route opencode inattendue (HTML) : /api/experimental/session/ses_test/wait')
+  })
+  it('message de la consigne absent d’une fenêtre pleine de messages → cli explicite, sans attendre le délai', async () => {
+    const { f: base } = fauxOpencode([() => reussi('{"a": 1}')])
+    const pleine = Array.from({ length: 50 }, (_, i) => ({ id: `msg_x${i}`, type: 'assistant' }))
+    const f = ((url: string, init: RequestInit) => url.includes('/message?') ? Promise.resolve(new Response(JSON.stringify({ data: pleine, cursor: {} }), { status: 200 })) : base(url, init)) as unknown as typeof fetch
+    const r = await lecteur(f).lire({ ...REQ, delaiMs: 5_000 })
+    expect(r).toMatchObject({ ok: false, erreur: 'cli' })
+    expect(messageDe(r)).toContain('hors des 50 derniers messages')
+  })
+  it('délai dépassé pendant l’envoi lui-même → exécution interrompue avant la suppression', async () => {
+    const { f, appels } = fauxOpencode([() => new Promise<Response>(() => {})])
+    expect(await lecteur(f).lire({ ...REQ, delaiMs: 20 })).toMatchObject({ ok: false, erreur: 'timeout' })
+    const i = appels.findIndex(a => a.url.endsWith('/interrupt'))
+    expect(i).toBeGreaterThan(0)
+    expect(appels.at(-1)).toMatchObject({ init: { method: 'DELETE' } })
+  })
   it('délai dépassé pendant la lecture du corps de la liste des messages → timeout (pas cli)', async () => {
     const { f: base, appels } = fauxOpencode([() => reussi('{"a": 1}')])
     const f = ((url: string, init: RequestInit) => {

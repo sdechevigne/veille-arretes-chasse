@@ -140,6 +140,7 @@ verifie "npm ci sans scripts d'installation" 'grep -q "^ci ci --silent --ignore-
 verifie "version Claude lue dans l'environnement de l'unité opencode-serve" 'grep -q -- "--user show opencode-serve -p Environment --value" "$RACINE/appels.systemctl"'
 verifie "version Claude transmise à opencode" '[ "$(cat "$D/home/fake-oc-version")" = 2.1.283 ]'
 verifie "plugins d'opencode : manta-claude-max seul, copié en entier" '[ "$(cat "$D/home/fake-oc-plugins")" = "$(printf "manta-claude-max\nmanta-claude-max/index.ts\nmanta-claude-max/lib\nmanta-claude-max/lib/seats.ts\n")" ]'
+verifie "mises à jour automatiques d'opencode coupées" 'grep -qw OPENCODE_DISABLE_AUTOUPDATE "$D/home/fake-oc-env"'
 verifie "lien auth.json d'opencode retiré" '[ "$(cat "$D/home/fake-oc-auth")" = absent ]'
 verifie "contrôle du fournisseur par la route V2" 'grep -q "/api/provider" "$RACINE/appels.curl" && ! grep -q "/config/providers" "$RACINE/appels.curl"'
 verifie "secret voisin de l'unité absent d'opencode et de la sortie" '! grep -q "OPENCODE_PASSWORD" "$D/home/fake-oc-env" && ! grep -q "secret-voisin" "$D/err" "$D/out"'

@@ -82,8 +82,9 @@ ETAPE="démarrage d'opencode"
 VERSION_CLI=$(systemctl --user show opencode-serve -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^ANTHROPIC_CLI_VERSION=//p' | tail -n1 || true)
 if [[ $VERSION_CLI =~ ^[0-9]+(\.[0-9]+)*$ ]]; then VERSION_ENV=(ANTHROPIC_CLI_VERSION="$VERSION_CLI")
 else VERSION_ENV=(); echo "avertissement : ANTHROPIC_CLI_VERSION absente de l'unité opencode-serve, opencode isolé lancé sans" >&2; fi
-# Environnement minimal : aucun secret du robot dans le processus opencode.
-(cd "$OC/travail" && exec env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG=C.UTF-8 "${VERSION_ENV[@]}" \
+# Environnement minimal : aucun secret du robot dans le processus opencode ; mises à jour automatiques coupées (comme l'unité
+# opencode-serve), en plus de « update »: « disable » dans opencode.jsonc.
+(cd "$OC/travail" && exec env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG=C.UTF-8 OPENCODE_DISABLE_AUTOUPDATE=1 "${VERSION_ENV[@]}" \
   XDG_CONFIG_HOME="$OC/config" XDG_DATA_HOME="$OC/data" XDG_STATE_HOME="$OC/state" OPENCODE_SERVER_PASSWORD="$MDP" \
   "$OPENCODE_BIN" serve --port "$PORT" --hostname 127.0.0.1) >> "$ETAT/opencode.log" 2>&1 &
 PID=$!
