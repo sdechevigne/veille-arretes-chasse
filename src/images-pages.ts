@@ -37,8 +37,10 @@ export async function pagesSansImage(archive: Archive, doc: Pick<DocumentEnBase,
   return manquantes
 }
 
-/** Rendu coupé par le délai (machine chargée) : passager, retenté au passage suivant. Tout autre échec de rendu est déterministe. */
-const estPassager = (message: string) => /délai dépassé/.test(message)
+/** Rendu impossible pour ce PDF : pdftoppm a tourné et rendu un code de sortie numérique non nul (format de `run()` dans pdf.ts :
+ *  « pdftoppm (<code>) : … » ; page hors du PDF comprise). Tout le reste (lancement impossible, processus tué « (null) », délai,
+ *  disque plein, PNG absent) est une panne de la machine : passagère, retentée au passage suivant. */
+const renduImpossible = (message: string) => /^pdftoppm \(\d+\) : /.test(message)
 /** Première ligne du message d'échec, bornée (le motif tient dans la colonne erreur). */
 const causeAbregee = (message: string) => (message.split('\n')[0] || 'cause inconnue').slice(0, 120)
 
@@ -63,7 +65,7 @@ export async function produireImagesPages(deps: DepsImagesPages, o: OptionsImage
         try { png = await deps.outils.imagePage(temp.chemin, n) }
         catch (e) {
           const message = (e as Error).message
-          if (estPassager(message)) { echec = true; log(`${doc.departement} image page ${n} impossible : ${message}`); continue }
+          if (!renduImpossible(message)) { echec = true; log(`${doc.departement} image page ${n} impossible : ${message}`); continue }
           rendu = `image de la page ${n} impossible à produire : ${causeAbregee(message)}`; break
         }
         try { await deps.archive.deposer(cleImagePage(doc.saison, doc.departement, doc.sha256, n), png, 'image/png'); stats.images++ }

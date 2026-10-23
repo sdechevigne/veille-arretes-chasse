@@ -61,22 +61,26 @@ describe('produireImagesPages', () => {
   // sort de la file (en_attente, à traiter à la main) au lieu de rester a_lire indéfiniment ; le suivant continue.
   it('rendu impossible : document en_attente avec le motif, compté sortis, jamais repris ; le suivant continue', async () => {
     const m = await monter(2)
-    const casse = { ...m.outils, async imagePage(pdf: string, n: number) { if (pdf.endsWith('%PDF-0')) throw new Error('pdftoppm : code 1\nSyntax Error: Couldn\'t read xref table'); return Buffer.from(`png${n}`) } }
+    const casse = { ...m.outils, async imagePage(pdf: string, n: number) { if (pdf.endsWith('%PDF-0')) throw new Error("pdftoppm (1) : Syntax Error: Couldn't read xref table"); return Buffer.from(`png${n}`) } }
     const stats = await m.lancer({}, casse)
     expect(stats).toEqual({ documents: 2, images: 1, erreurs: 0, sortis: 1 })
-    expect(m.depot.etat.documents[0]).toMatchObject({ statut_traitement: 'en_attente', erreur: 'image de la page 1 impossible à produire : pdftoppm : code 1' })
+    expect(m.depot.etat.documents[0]).toMatchObject({ statut_traitement: 'en_attente', erreur: "image de la page 1 impossible à produire : pdftoppm (1) : Syntax Error: Couldn't read xref table" })
     expect(m.depot.etat.documents[1].statut_traitement).toBe('a_lire')
     expect(m.journal.join('\n')).toMatch(/54.*image de la page 1 impossible à produire/)
     expect(m.liberes).toEqual(['%PDF-0', '%PDF-1'])
     expect(await m.lancer({}, casse)).toEqual({ documents: 0, images: 0, erreurs: 0, sortis: 0 })
   })
 
-  it('rendu coupé par le délai (machine chargée) : passager, erreur comptée, document repris', async () => {
-    const m = await monter(1)
-    const lent = { ...m.outils, async imagePage(): Promise<Buffer> { throw new Error('pdftoppm : délai dépassé') } }
-    expect(await m.lancer({}, lent)).toEqual({ documents: 1, images: 0, erreurs: 1, sortis: 0 })
-    expect(m.depot.etat.documents[0].statut_traitement).toBe('a_lire')
-  })
+  // Seul un pdftoppm qui a tourné et rendu un code de sortie numérique non nul (format de run() : « pdftoppm (<code>) : … ») sort
+  // le document ; une panne de la machine (lancement impossible, processus tué, délai, disque plein) ne dit rien du PDF.
+  for (const message of ['pdftoppm : délai dépassé', 'spawn pdftoppm ENOENT', 'pdftoppm (null) : ', 'ENOSPC: no space left on device, mkdtemp', "ENOENT: no such file or directory, open '/tmp/veille-img-x/p.png'"]) {
+    it(`panne de la machine (« ${message} ») : passagère, erreur comptée, document toujours a_lire`, async () => {
+      const m = await monter(1)
+      const panne = { ...m.outils, async imagePage(): Promise<Buffer> { throw new Error(message) } }
+      expect(await m.lancer({}, panne)).toEqual({ documents: 1, images: 0, erreurs: 1, sortis: 0 })
+      expect(m.depot.etat.documents[0]).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
+    })
+  }
 
   it('dépôt R2 en échec : passager, erreur comptée, document toujours a_lire et repris le lendemain', async () => {
     const m = await monter(1)
