@@ -491,12 +491,25 @@ describe('lireAvecClaude', () => {
     expect(m.doc(0)).toMatchObject({ statut_traitement: 'erreur', erreur: 'lecture claude : soumettre : date invalide (tentative 1)' })
   })
 
-  it('payload hors vocabulaire → erreur avant la RPC', async () => {
+  // Refus de validation : déterministe (relire donnerait le même refus) → sorti de la file, à traiter à la main, jamais rejoué.
+  it('payload hors vocabulaire → refus avant la RPC : en_attente (à la main), compté sans lecture, pas en erreur', async () => {
     const loup = sortie({ periodes: [{ ...P1, espece_code: 'loup' }] })
     const m = await monter([{}], [ok(loup), ok(loup, 'opus')])
-    await m.lancer()
+    const stats = await m.lancer()
     expect(m.depot.etat.propositions).toHaveLength(0)
-    expect(m.doc(0).erreur).toMatch(/^lecture claude : payload refusé : espece hors vocabulaire: "loup"/)
+    expect(m.doc(0).statut_traitement).toBe('en_attente')
+    expect(m.doc(0).erreur).toMatch(/^payload refusé : espece hors vocabulaire: "loup"/)
+    expect(stats).toMatchObject({ sansLecture: 1, erreurs: 0, traites: 1 })
+    expect(m.journal.some(l => l.startsWith('54 en attente : payload refusé : espece hors vocabulaire'))).toBe(true)
+  })
+
+  it('« signé » sans date de signature : refus de validation, document sorti de la file, non relu au passage suivant', async () => {
+    const sansDate = sortie({ acte: { ...ACTE, date: null } })
+    const m = await monter([{}], [ok(sansDate)])
+    expect(await m.lancer()).toMatchObject({ sansLecture: 1, erreurs: 0 })
+    expect(m.doc(0)).toMatchObject({ statut_traitement: 'en_attente', erreur: 'payload refusé : statut "signe" mais date_signature absente ; preuve.signature_detectee vide' })
+    expect(await m.lancer()).toMatchObject({ traites: 0, sansLecture: 0 })
+    expect(m.lecteur.requetes).toHaveLength(1)
   })
 
   it('erreur de lecture ancienne : relue, le compteur de tentatives avance', async () => {

@@ -90,7 +90,8 @@ export function messageErreur(message: string, tentative: number): string {
 
 async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats: StatsLectureClaude, log: (l: string) => void): Promise<ResultatSoumission | null> {
   const { depot } = deps; const dept = doc.departement; const saison = doc.saison; const type = doc.type_detecte
-  // Sans lecture possible (pas une panne rejouable) : en attente d'un opérateur, aucun appel Claude.
+  // Sans lecture possible (pas une panne rejouable) : en attente d'un opérateur, aucun appel Claude (même sortie, plus bas,
+  // pour un payload refusé par la validation).
   if (!estLisible(type) || !doc.texte_r2_key) {
     const motif = type === 'indetermine' ? 'type non déterminé mécaniquement'
       : !estLisible(type) ? `type ${type ?? 'absent'} : pas de lecture Claude` : 'texte extrait absent : lecture Claude impossible'
@@ -151,8 +152,12 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   const noteDept = deptDetecte(acte.departement_lu, nom).note
   if (noteDept) notes.push(noteDept)
   const payload = payloadDe({ departement: dept, saison, nom, statut: acte.signe ? 'signe' : 'en_attente_signature', acte, url: doc.url, periodes: conso.periodes, notes: lu.sortie.notes, suppressions: lu.sortie.suppressions })
+  // Refus de validation : déterministe (une relecture donnerait le même refus) → sorti de la file, en attente d'un opérateur.
   const refus = validerVocabulaire(payload)
-  if (refus.length) throw new Error(`payload refusé : ${refus.join(' ; ')}`)
+  if (refus.length) {
+    const motif = `payload refusé : ${refus.join(' ; ')}`
+    await depot.majStatut(doc.id, 'en_attente', motif); stats.sansLecture++; log(`${dept} en attente : ${motif}`); return null
+  }
 
   const proposition: PropositionRobot = {
     document_id: doc.id, departement: dept, saison, mode, type_acte: type, payload, acte: { numero: acte.numero, date: acte.date, objet: acte.objet },
