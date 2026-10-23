@@ -195,6 +195,8 @@ verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
 echo "# 5 ter. origin a un commit plus récent qui modifie le script : relance une fois, la NOUVELLE logique s'exécute, pas de boucle"
 preparer relance
 sed -i 's|^set -euo pipefail$|set -euo pipefail\necho "nouvelle logique (REEXEC=${VEILLE_REEXEC:-})" >> "$APPELS.marqueur"|' "$D/origin/scripts/lecture-nocturne.sh"
+# Lignes insérées AU-DESSUS du bloc de mise à jour (décalage des octets) : le nouveau script ne doit pas être lu à l'ancien offset.
+sed -i '/^# Code à jour/i # décalage 1 : ligne ajoutée pour déplacer les octets du fichier, bien au-dessus du bloc de mise à jour\n# décalage 2 : encore une ligne de commentaire plus longue que la précédente pour être certain de désaligner la lecture\nENTETE_AJOUTEE=1' "$D/origin/scripts/lecture-nocturne.sh"
 git -C "$D/origin" -c user.name=t -c user.email=t@t commit -q -am "script modifié"
 lancer relance FAKE_LIRE=calme
 verifie "code 0" '[ "$RC" = 0 ]'
