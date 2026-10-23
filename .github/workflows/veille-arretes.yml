@@ -213,6 +213,7 @@ jobs:
   # seulement, hors VPN). Un rattrapage coupé par son budget reprend donc le lendemain, et non au lundi suivant : la lecture
   # Claude de la nuit ne lit pas un document tant qu'une de ses pages scannées n'a pas son image (constat du 19/10 : budget de
   # 20 min épuisé après 19 documents sur 29, les 10 autres sans image pendant une semaine).
+  # Tourne même si `veille` a échoué, et couvre toujours tous les départements (toute la file a_lire, sans filtre `departements`).
   images:
     needs: veille
     if: ${{ !cancelled() }}
