@@ -28,6 +28,7 @@ import { createServer } from 'node:http'
 import { readFileSync, writeFileSync } from 'node:fs'
 const mode = (() => { try { return readFileSync(`${process.env.HOME}/fake-oc-mode`, 'utf8').trim() } catch { return 'normal' } })()
 writeFileSync(`${process.env.HOME}/fake-oc-env`, Object.keys(process.env).sort().join(' '))
+writeFileSync(`${process.env.HOME}/fake-oc-version`, process.env.ANTHROPIC_CLI_VERSION ?? '')
 if (mode === 'meurt') process.exit(1)
 if (mode === 'muet') setInterval(() => {}, 1000)
 else {
@@ -64,6 +65,19 @@ case "$1" in
 esac
 SH
 chmod +x "$RACINE/bin/npm"
+
+# Faux systemctl : environnement de l'unité opencode-serve (FAKE_SYSTEMCTL : normal / sans-version / echec), avec un secret
+# voisin qui ne doit jamais atteindre opencode ni la sortie du script.
+cat > "$RACINE/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+echo "$*" >> "$APPELS.systemctl"
+case "${FAKE_SYSTEMCTL:-normal}" in
+  normal) echo "OPENCODE_PASSWORD=secret-voisin ANTHROPIC_CLI_VERSION=2.1.283 PATH=/usr/bin" ;;
+  sans-version) echo "OPENCODE_PASSWORD=secret-voisin PATH=/usr/bin" ;;
+  echec) exit 1 ;;
+esac
+SH
+chmod +x "$RACINE/bin/systemctl"
 
 # Faux curl : consigne ses arguments (pour vérifier qu'aucun identifiant n'y figure) puis appelle le vrai.
 cat > "$RACINE/bin/curl" <<'SH'
@@ -106,6 +120,17 @@ verifie "ligne invalide signalée" 'grep -q "ligne ignorée" "$D/err"'
 verifie "curl appelé, sans identifiants dans les arguments" '[ -s "$RACINE/appels.curl" ] && ! grep -qE "opencode:|[Pp]assword" "$RACINE/appels.curl"'
 verifie "fichier de passage écrit" 'ls "$D"/etat/passages/*.json >/dev/null 2>&1'
 verifie "npm ci sans scripts d'installation" 'grep -q "^ci ci --silent --ignore-scripts" "$RACINE/appels"'
+verifie "version Claude lue dans l'environnement de l'unité opencode-serve" 'grep -q -- "--user show opencode-serve -p Environment --value" "$RACINE/appels.systemctl"'
+verifie "version Claude transmise à opencode" '[ "$(cat "$D/home/fake-oc-version")" = 2.1.283 ]'
+verifie "secret voisin de l'unité absent d'opencode et de la sortie" '! grep -q "OPENCODE_PASSWORD" "$D/home/fake-oc-env" && ! grep -q "secret-voisin" "$D/err" "$D/out"'
+
+echo "# 1 bis. version Claude absente de l'unité (ou systemctl en échec) : avertissement, lancement sans"
+for mode in sans-version echec; do
+  preparer "version-$mode"; lancer "version-$mode" FAKE_LIRE=calme FAKE_SYSTEMCTL=$mode
+  verifie "$mode : code 0" '[ "$RC" = 0 ]'
+  verifie "$mode : avertissement" 'grep -q "ANTHROPIC_CLI_VERSION absente" "$D/err"'
+  verifie "$mode : opencode lancé sans version" '[ -e "$D/home/fake-oc-version" ] && [ ! -s "$D/home/fake-oc-version" ]'
+done
 
 echo "# 2. passage avec propositions : notifier appelé, code 0"
 preparer actif; lancer actif FAKE_LIRE=actif

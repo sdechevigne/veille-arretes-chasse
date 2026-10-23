@@ -68,8 +68,14 @@ MDP=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')
 curl_oc() { printf 'user = "opencode:%s"\n' "$MDP" | curl -fsS -K - "$@"; }
 
 ETAPE="démarrage d'opencode"
+# Version de la CLI Claude annoncée par le plugin d'authentification : source unique = valeur effective de l'unité opencode-serve
+# (l'opencode principal), sinon le plugin envoie sa valeur intégrée, refusée par les modèles récents. Seule cette variable est
+# extraite de l'environnement de l'unité (qui porte aussi des secrets) ; absente → avertissement et lancement sans.
+VERSION_CLI=$(systemctl --user show opencode-serve -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^ANTHROPIC_CLI_VERSION=//p' | tail -n1 || true)
+if [[ $VERSION_CLI =~ ^[0-9]+(\.[0-9]+)*$ ]]; then VERSION_ENV=(ANTHROPIC_CLI_VERSION="$VERSION_CLI")
+else VERSION_ENV=(); echo "avertissement : ANTHROPIC_CLI_VERSION absente de l'unité opencode-serve, opencode isolé lancé sans" >&2; fi
 # Environnement minimal : aucun secret du robot dans le processus opencode.
-(cd "$OC/travail" && exec env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG=C.UTF-8 \
+(cd "$OC/travail" && exec env -i HOME="$HOME" PATH="$PATH" USER="$USER" LANG=C.UTF-8 "${VERSION_ENV[@]}" \
   XDG_CONFIG_HOME="$OC/config" XDG_DATA_HOME="$OC/data" XDG_STATE_HOME="$OC/state" OPENCODE_SERVER_PASSWORD="$MDP" \
   "$OPENCODE_BIN" serve --port "$PORT" --hostname 127.0.0.1) >> "$ETAT/opencode.log" 2>&1 &
 PID=$!
