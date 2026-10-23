@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lecture Claude nocturne de la veille, sur la machine Manta : opencode isolé (rotation des sièges Claude par le plugin
-# manta-accounts), lire-claude, notification, arrêt du serveur. Lancé par systemd (veille-arretes-lecture.timer).
+# Lecture Claude nocturne de la veille, sur la machine Manta : opencode V2 isolé (abonnement Claude et rotation des sièges
+# par le plugin manta-claude-max), lire-claude, notification, arrêt du serveur. Lancé par systemd (veille-arretes-lecture.timer).
 # Un passage en échec (quelle que soit l'étape) est notifié, puis le script sort avec le code d'échec (visible dans systemd).
 set -euo pipefail
 ROBOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -57,10 +57,18 @@ fi
 
 ETAPE="préparation d'opencode"
 OC=$ETAT/opencode
+# Seul plugin Manta de l'instance : le dossier manta-claude-max de l'opencode principal (fournisseur anthropic sur
+# l'abonnement, identité Claude Code, siège Manta par conversation), recopié en entier à chaque passage. Il trouve seul,
+# par HOME, le jeton de manta-server (~/.manta/auth.json), les sièges (~/.manta-secrets/accounts) et la connexion Claude
+# (~/.claude/.credentials.json) : rien d'autre à transmettre. Le dossier des plugins est refait à neuf (aucun reliquat,
+# ni manta ni manta-optimizer) ; l'ancien lien vers auth.json d'opencode (V1) ne sert plus.
+PLUGIN=$HOME/.config/opencode/plugins/manta-claude-max
+[ -f "$PLUGIN/index.ts" ] || { echo "plugin manta-claude-max introuvable : $PLUGIN (mise à jour de Manta ?)" >&2; exit 1; }
+rm -rf "$OC/config/opencode/plugins"
 mkdir -p "$OC/config/opencode/plugins" "$OC/data/opencode" "$OC/state" "$OC/travail" "$ETAT/passages"
+rm -f "$OC/data/opencode/auth.json"
 install -m 0644 "$ROBOT/opencode/opencode.jsonc" "$OC/config/opencode/opencode.jsonc"
-install -m 0644 "$HOME/.config/opencode/plugins/manta-accounts.ts" "$OC/config/opencode/plugins/manta-accounts.ts"
-ln -sfn "$HOME/.local/share/opencode/auth.json" "$OC/data/opencode/auth.json"
+cp -R "$PLUGIN" "$OC/config/opencode/plugins/manta-claude-max"
 
 PORT=$(node -e "const s=require('net').createServer().listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")
 MDP=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')
@@ -68,7 +76,7 @@ MDP=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')
 curl_oc() { printf 'user = "opencode:%s"\n' "$MDP" | curl -fsS -K - "$@"; }
 
 ETAPE="démarrage d'opencode"
-# Version de la CLI Claude annoncée par le plugin d'authentification : source unique = valeur effective de l'unité opencode-serve
+# Version de la CLI Claude annoncée par le plugin manta-claude-max : source unique = valeur effective de l'unité opencode-serve
 # (l'opencode principal), sinon le plugin envoie sa valeur intégrée, refusée par les modèles récents. Seule cette variable est
 # extraite de l'environnement de l'unité (qui porte aussi des secrets) ; absente → avertissement et lancement sans.
 VERSION_CLI=$(systemctl --user show opencode-serve -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^ANTHROPIC_CLI_VERSION=//p' | tail -n1 || true)
@@ -80,16 +88,23 @@ else VERSION_ENV=(); echo "avertissement : ANTHROPIC_CLI_VERSION absente de l'un
   "$OPENCODE_BIN" serve --port "$PORT" --hostname 127.0.0.1) >> "$ETAT/opencode.log" 2>&1 &
 PID=$!
 
-# Attente bornée par le temps écoulé (le premier démarrage télécharge le plugin d'authentification Claude).
-pret=0; debut=$SECONDS
+# Attente bornée par le temps écoulé : serveur joignable PUIS fournisseur anthropic activé par le plugin (le registre des
+# fournisseurs se construit quelques secondes après l'ouverture du port : liste d'abord vide).
+anthropic_actif() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let ok=false;try{ok=JSON.parse(s).data.some(p=>p.id==="anthropic"&&p.activation==="enabled")}catch{}process.exit(ok?0:1)})'; }
+pret=0; joint=0; debut=$SECONDS
 while [ $((SECONDS - debut)) -lt "$DELAI_PRET" ]; do
-  if curl_oc -m 10 -o /dev/null "http://127.0.0.1:$PORT/config/providers"; then pret=1; break; fi
+  if fournisseurs=$(curl_oc -m 10 "http://127.0.0.1:$PORT/api/provider"); then
+    joint=1; ETAPE="contrôle du fournisseur anthropic"
+    if printf '%s' "$fournisseurs" | anthropic_actif; then pret=1; break; fi
+  fi
   kill -0 "$PID" 2>/dev/null || { echo "opencode isolé arrêté au démarrage (voir $ETAT/opencode.log)" >&2; exit 1; }
   sleep 1
 done
-[ "$pret" = 1 ] || { echo "opencode isolé injoignable après $DELAI_PRET s (voir $ETAT/opencode.log)" >&2; exit 1; }
-ETAPE="contrôle du fournisseur anthropic"
-curl_oc -m 30 "http://127.0.0.1:$PORT/config/providers" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{if(!JSON.parse(s).providers.some(p=>p.id==="anthropic")){console.error("fournisseur anthropic absent (auth.json ?)");process.exit(1)}})'
+if [ "$pret" != 1 ]; then
+  if [ "$joint" = 1 ]; then echo "fournisseur anthropic absent après $DELAI_PRET s (plugin manta-claude-max inopérant ? voir $ETAT/opencode.log)" >&2
+  else echo "opencode isolé injoignable après $DELAI_PRET s (voir $ETAT/opencode.log)" >&2; fi
+  exit 1
+fi
 
 ETAPE="lecture Claude"
 charger_secrets

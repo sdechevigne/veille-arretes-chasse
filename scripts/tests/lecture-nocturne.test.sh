@@ -21,23 +21,34 @@ node "$RACINE/webhook.mjs" "$RACINE/webhook.log" "$RACINE/webhook.port" & echo $
 for _ in $(seq 50); do [ -s "$RACINE/webhook.port" ] && break; sleep 0.1; done
 URL="http://127.0.0.1:$(cat "$RACINE/webhook.port")/hook"
 
-# Faux opencode : mêmes règles d'authentification (Basic opencode:<mdp>), mode lu dans $HOME/fake-oc-mode (env -i : pas de variable).
+# Faux opencode V2 : mêmes règles d'authentification (Basic opencode:<mdp>), mode lu dans $HOME/fake-oc-mode (env -i : pas
+# de variable). Consigne le contenu de son dossier de plugins et la présence d'un auth.json dans ses données.
 cat > "$RACINE/fake-opencode" <<'JS'
 #!/usr/bin/env node
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 const mode = (() => { try { return readFileSync(`${process.env.HOME}/fake-oc-mode`, 'utf8').trim() } catch { return 'normal' } })()
 writeFileSync(`${process.env.HOME}/fake-oc-env`, Object.keys(process.env).sort().join(' '))
 writeFileSync(`${process.env.HOME}/fake-oc-version`, process.env.ANTHROPIC_CLI_VERSION ?? '')
+const plugins = `${process.env.XDG_CONFIG_HOME}/opencode/plugins`
+writeFileSync(`${process.env.HOME}/fake-oc-plugins`, (existsSync(plugins) ? readdirSync(plugins, { recursive: true }).sort() : []).join('\n') + '\n')
+const auth = `${process.env.XDG_DATA_HOME}/opencode/auth.json`
+writeFileSync(`${process.env.HOME}/fake-oc-auth`, (() => { try { lstatSync(auth); return 'present' } catch { return 'absent' } })())
 if (mode === 'meurt') process.exit(1)
 if (mode === 'muet') setInterval(() => {}, 1000)
 else {
   const port = +process.argv[process.argv.indexOf('--port') + 1]
   const attendu = 'Basic ' + Buffer.from(`opencode:${process.env.OPENCODE_SERVER_PASSWORD}`).toString('base64')
+  let n = 0
   createServer((req, res) => {
     if (req.headers.authorization !== attendu) { res.statusCode = 401; return res.end() }
+    // Ancienne route V1 : la V2 y sert l'application web (HTML, code 200).
+    if (req.url !== '/api/provider') { res.setHeader('content-type', 'text/html'); return res.end('<!doctype html>') }
     res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify({ providers: [{ id: mode === 'sans-anthropic' ? 'opencode' : 'anthropic' }] }))
+    // « tardif » : registre des fournisseurs encore vide aux premières requêtes (démarrage réel de la V2).
+    const pret = mode !== 'sans-anthropic' && !(mode === 'tardif' && ++n <= 2)
+    const data = pret ? [{ id: 'anthropic', activation: 'enabled' }, { id: 'opencode', activation: 'enabled' }] : mode === 'sans-anthropic' ? [{ id: 'opencode', activation: 'enabled' }] : []
+    res.end(JSON.stringify({ location: { directory: process.cwd() }, data }))
   }).listen(port, '127.0.0.1')
 }
 JS
@@ -95,7 +106,13 @@ preparer() {
   echo '{}' > "$D/origin/package-lock.json"
   git -C "$D/origin" add . && git -C "$D/origin" -c user.name=t -c user.email=t@t commit -q -m init
   git clone -q "$D/origin" "$D/robot"
-  echo x > "$D/home/.config/opencode/plugins/manta-accounts.ts"; echo '{}' > "$D/home/.local/share/opencode/auth.json"
+  # Plugins de l'opencode principal (dossiers V2) : seul manta-claude-max doit être copié.
+  mkdir -p "$D/home/.config/opencode/plugins/manta-claude-max/lib" "$D/home/.config/opencode/plugins/manta" "$D/home/.config/opencode/plugins/manta-optimizer"
+  echo x > "$D/home/.config/opencode/plugins/manta-claude-max/index.ts"; echo x > "$D/home/.config/opencode/plugins/manta-claude-max/lib/seats.ts"
+  echo x > "$D/home/.config/opencode/plugins/manta/index.ts"; echo '{}' > "$D/home/.local/share/opencode/auth.json"
+  # Reliquats d'un passage V1 dans l'état : ancien plugin manta-accounts.ts et lien auth.json, à retirer.
+  mkdir -p "$D/etat/opencode/config/opencode/plugins" "$D/etat/opencode/data/opencode"
+  echo x > "$D/etat/opencode/config/opencode/plugins/manta-accounts.ts"; ln -s "$D/home/.local/share/opencode/auth.json" "$D/etat/opencode/data/opencode/auth.json"
   # Valeur de secret avec métacaractères shell : doit être lue telle quelle.
   printf 'MANTA_WEBHOOK_URL=%s\nMANTA_WEBHOOK_SECRET=a$b"c d;e`f` \\g\n# commentaire\nligne invalide\n' "$URL" > "$D/secrets"
   : > "$RACINE/webhook.log"; rm -f "$RACINE/appels"*
@@ -122,6 +139,9 @@ verifie "fichier de passage écrit" 'ls "$D"/etat/passages/*.json >/dev/null 2>&
 verifie "npm ci sans scripts d'installation" 'grep -q "^ci ci --silent --ignore-scripts" "$RACINE/appels"'
 verifie "version Claude lue dans l'environnement de l'unité opencode-serve" 'grep -q -- "--user show opencode-serve -p Environment --value" "$RACINE/appels.systemctl"'
 verifie "version Claude transmise à opencode" '[ "$(cat "$D/home/fake-oc-version")" = 2.1.283 ]'
+verifie "plugins d'opencode : manta-claude-max seul, copié en entier" '[ "$(cat "$D/home/fake-oc-plugins")" = "$(printf "manta-claude-max\nmanta-claude-max/index.ts\nmanta-claude-max/lib\nmanta-claude-max/lib/seats.ts\n")" ]'
+verifie "lien auth.json d'opencode retiré" '[ "$(cat "$D/home/fake-oc-auth")" = absent ]'
+verifie "contrôle du fournisseur par la route V2" 'grep -q "/api/provider" "$RACINE/appels.curl" && ! grep -q "/config/providers" "$RACINE/appels.curl"'
 verifie "secret voisin de l'unité absent d'opencode et de la sortie" '! grep -q "OPENCODE_PASSWORD" "$D/home/fake-oc-env" && ! grep -q "secret-voisin" "$D/err" "$D/out"'
 
 echo "# 1 bis. version Claude absente de l'unité (ou systemctl en échec) : avertissement, lancement sans"
@@ -171,11 +191,24 @@ verifie "fetch borné à 60 s" '[ "$(cat "$RACINE/appels.timeout" 2>/dev/null)" 
 verifie "avertissement" 'grep -q "mise à jour du code impossible" "$D/err"'
 verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
 
-echo "# 6. fournisseur anthropic absent"
-preparer sansanth; echo sans-anthropic > "$D/home/fake-oc-mode"; lancer sansanth
+echo "# 6. fournisseur anthropic jamais activé (plugin inopérant) : échec au bout du délai, message clair"
+preparer sansanth; echo sans-anthropic > "$D/home/fake-oc-mode"; lancer sansanth VEILLE_DELAI_PRET=3
 verifie "code 1" '[ "$RC" = 1 ]'
+verifie "message clair" 'grep -q "fournisseur anthropic absent" "$D/err"'
 verifie "webhook : contrôle du fournisseur" 'dernier_webhook | grep -q "en échec : contrôle du fournisseur anthropic"'
 verifie "lire-claude non lancé" '! grep -q "^lire-claude" "$RACINE/appels" 2>/dev/null'
+
+echo "# 6 bis. fournisseur anthropic activé après quelques secondes (registre en construction) : passage normal"
+preparer tardif; echo tardif > "$D/home/fake-oc-mode"; lancer tardif FAKE_LIRE=calme
+verifie "code 0" '[ "$RC" = 0 ]'
+verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
+
+echo "# 6 ter. plugin manta-claude-max absent de l'opencode principal : échec clair avant tout lancement"
+preparer sansplugin; rm -rf "$D/home/.config/opencode/plugins/manta-claude-max"; lancer sansplugin
+verifie "code 1" '[ "$RC" = 1 ]'
+verifie "message clair" 'grep -q "plugin manta-claude-max introuvable" "$D/err"'
+verifie "webhook : préparation d'opencode" 'dernier_webhook | grep -q "en échec : préparation d'"'"'opencode"'
+verifie "opencode non lancé" '[ ! -e "$D/home/fake-oc-env" ]'
 
 echo "# 7. opencode meurt au démarrage (sortie rapide, sans attendre le délai)"
 preparer meurt; echo meurt > "$D/home/fake-oc-mode"; lancer meurt VEILLE_DELAI_PRET=60

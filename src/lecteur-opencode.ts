@@ -1,25 +1,35 @@
-// Lecteur Claude par un opencode local (instance isolée de la machine Manta) : la rotation des sièges Claude est
-// assurée par le plugin manta-accounts de cette instance. Sortie demandée en JSON texte (la sortie structurée native
-// d'opencode force un tool_choice refusé par claude-sonnet-5-5), puis validée par Ajv. `lire` ne rejette jamais.
+// Lecteur Claude par un opencode V2 local (instance isolée de la machine Manta) : la rotation des sièges Claude est
+// assurée par le plugin manta-claude-max de cette instance. API de session V2 : la consigne (+ schéma) est une
+// instruction de la session, l'envoi (POST …/prompt) est asynchrone, la réponse se lit dans la liste des messages une
+// fois la session revenue au repos (message « idle »). Sortie demandée en JSON texte, validée par Ajv. `lire` ne rejette jamais.
 import { expurger } from './http.ts'
 import { DELAI_LECTURE_MS, schemaSansMeta, validerSortie } from './lecteur.ts'
 import type { Lecteur, ReponseLecture, RequeteLecture } from './lecteur.ts'
 import type { LectureClaude } from './types.ts'
 
 export const MODELES_OPENCODE = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' } as const
-export interface ConfigOpencode { url: string; motDePasse?: string }
+// `trancheAttenteMs` : durée maximale d'une attente bloquante (POST …/wait) avant de relire les messages, pour repérer
+// une limite d'usage pendant les nouvelles tentatives d'opencode sans attendre la fin du délai de lecture.
+export interface ConfigOpencode { url: string; motDePasse?: string; trancheAttenteMs?: number }
 
 const COURT = 500
 const abreger = (t: string) => (t.length > COURT ? `${t.slice(0, COURT)}…` : t)
-// Texte d'une erreur de message (rendue par l'API Anthropic) ; un statut HTTP se teste sur `r.status`, jamais sur un corps de réponse.
+// Texte d'une erreur rendue par l'API Anthropic ; un statut HTTP se teste sur le champ `status`, jamais sur un corps de réponse.
 const estQuota = (t: string) => /rate.?limit|usage limit|\b429\b/i.test(t)
 const estDelai = (e: any) => e?.name === 'TimeoutError' || e?.name === 'AbortError'
-// Délai fixe des appels de gestion de session (création, suppression) : un serveur figé ne doit pas bloquer `lire`.
+// Délai fixe des appels de gestion de session (création, consigne, interruption, suppression) : un serveur figé ne doit pas bloquer `lire`.
 const DELAI_SESSION_MS = 15_000
+const TRANCHE_ATTENTE_MS = 15_000
+// Pause avant une nouvelle attente quand la session n'a pas encore démarré l'exécution (l'attente rend alors aussitôt).
+const PAUSE_ATTENTE_MS = 250
+// Messages relus à chaque tour : ceux qui suivent la consigne envoyée (une réponse, un repos) tiennent largement dedans.
+const MESSAGES_LUS = 50
 // Longueur maximale des erreurs de schéma renvoyées au modèle dans la relance corrective.
 const ERREURS_RELANCE_MAX = 1_000
 type Usage = { input: number; output: number; cache_creation: number; cache_read: number }
-// Résultat d'un envoi de message : échec terminal (pas de relance), sortie valide, ou sortie hors schéma (relançable).
+type Erreur = { type?: string; message?: string; status?: number }
+type Message = { id?: string; type?: string; content?: { type: string; text?: string }[]; model?: { id?: string }; finish?: string; tokens?: any; error?: Erreur; retry?: { error?: Erreur }; outcome?: string }
+// Résultat d'un envoi de consigne : échec terminal (pas de relance), sortie valide, ou sortie hors schéma (relançable).
 type Envoi = { echec: ReponseLecture } | { modele: string; usage: Usage; sortie: unknown } | { modele: string; usage: Usage; invalide: string }
 
 export function extraireJson(texte: string): unknown {
@@ -32,64 +42,111 @@ function consigneSysteme(req: RequeteLecture): string {
   return `${req.systeme}\n\n## Format de sortie\nRéponds UNIQUEMENT par un objet JSON conforme au schéma JSON ci-dessous : aucun texte avant ni après, aucun bloc de code.\n${JSON.stringify(schemaSansMeta(req.schema))}`
 }
 
-function parties(req: RequeteLecture): object[] {
-  const p: object[] = [{ type: 'text', text: req.texte }]
-  for (const im of req.images ?? []) {
-    p.push({ type: 'text', text: `Image de la page ${im.page} :` })
-    p.push({ type: 'file', mime: 'image/png', filename: `page-${im.page}.png`, url: `data:image/png;base64,${im.png.toString('base64')}` })
+// Les pièces jointes arrivent au modèle sans leur nom : les pages des images sont donc annoncées dans le texte, dans l'ordre des pièces.
+function premiereConsigne(req: RequeteLecture): { text: string; files?: { uri: string; name: string }[] } {
+  const images = req.images ?? []
+  if (images.length === 0) return { text: req.texte }
+  return {
+    text: `${req.texte}\n\nImages jointes, dans l’ordre : ${images.map(im => `page ${im.page}`).join(', ')}.`,
+    files: images.map(im => ({ uri: `data:image/png;base64,${im.png.toString('base64')}`, name: `page-${im.page}.png` })),
   }
-  return p
 }
+
+const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) return reject(signal.reason)
+  const t = setTimeout(() => { signal.removeEventListener('abort', annuler); resolve() }, ms)
+  const annuler = () => { clearTimeout(t); reject(signal.reason) }
+  signal.addEventListener('abort', annuler, { once: true })
+})
 
 export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetch = fetch): Lecteur {
   const base = cfg.url.replace(/\/+$/, '')
+  const tranche = cfg.trancheAttenteMs ?? TRANCHE_ATTENTE_MS
   const entetes: Record<string, string> = { 'content-type': 'application/json' }
   if (cfg.motDePasse) entetes.authorization = `Basic ${Buffer.from(`opencode:${cfg.motDePasse}`).toString('base64')}`
   const echec = (erreur: 'quota' | 'schema' | 'timeout' | 'cli', message: string): ReponseLecture =>
     ({ ok: false, erreur, message: abreger(expurger(message.trim(), undefined, cfg.motDePasse)) })
+  const echecErreur = (e: Erreur): ReponseLecture => {
+    const texte = `${e.type ?? 'erreur'} ${e.message ?? ''}`
+    return e.status === 429 || estQuota(texte) ? echec('quota', texte) : echec('cli', texte)
+  }
   const appeler = (chemin: string, init: RequestInit) => fetchImpl(`${base}${chemin}`, { ...init, headers: entetes })
 
   return {
     async lire(req) {
       const delaiMs = req.delaiMs ?? DELAI_LECTURE_MS
       let session: string | undefined
+      let auRepos = true
       let etape = 'création de session'
       try {
-        const s = await appeler('/session', { method: 'POST', body: JSON.stringify({ title: 'veille-arretes', permission: [{ permission: '*', pattern: '*', action: 'deny' }] }), signal: AbortSignal.timeout(DELAI_SESSION_MS) })
+        const s = await appeler('/api/session', { method: 'POST', body: JSON.stringify({ title: 'veille-arretes', agent: 'lecteur', model: { providerID: 'anthropic', id: MODELES_OPENCODE[req.modele] }, permissions: [{ action: '*', resource: '*', effect: 'deny' }] }), signal: AbortSignal.timeout(DELAI_SESSION_MS) })
         if (!s.ok) return echec('cli', `création de session : HTTP ${s.status} ${await s.text()}`)
-        session = (await s.json() as { id: string }).id
-        const corps = { agent: 'lecteur', model: { providerID: 'anthropic', modelID: MODELES_OPENCODE[req.modele] }, system: consigneSysteme(req), tools: { '*': false }, parts: parties(req) }
+        session = (await s.json() as { data: { id: string } }).data.id
+        etape = 'pose de la consigne'
+        const c = await appeler(`/api/experimental/session/${session}/instructions/entries/consigne`, { method: 'PUT', body: JSON.stringify({ value: consigneSysteme(req) }), signal: AbortSignal.timeout(DELAI_SESSION_MS) })
+        if (!c.ok) return echec('cli', `pose de la consigne : HTTP ${c.status} ${await c.text()}`)
         etape = 'lecture'
         // Un seul signal pour les deux envois possibles (lecture + relance corrective) : `delaiMs` couvre l'ensemble, la relance n'a que l'échéance restante.
-        // Il couvre aussi la lecture du corps : un signal expiré pendant `text()` est rapporté par le `catch` ci-dessous.
+        // Il couvre aussi la lecture des corps : un signal expiré pendant `text()` est rapporté par le `catch` ci-dessous.
         const signal = AbortSignal.timeout(delaiMs)
-        const envoi = async (parts: object[]): Promise<Envoi> => {
-          const r = await appeler(`/session/${session}/message`, { method: 'POST', body: JSON.stringify({ ...corps, parts }), signal })
+
+        // Messages postérieurs à la consigne `idConsigne`, du plus ancien au plus récent ; null si elle n'est pas encore enregistrée.
+        const messagesApres = async (idConsigne: string): Promise<Message[] | null> => {
+          const r = await appeler(`/api/session/${session}/message?order=desc&limit=${MESSAGES_LUS}`, { method: 'GET', signal })
+          const brut = await r.text()
+          if (!r.ok) throw new Error(`liste des messages : HTTP ${r.status} ${brut}`)
+          const liste = (JSON.parse(brut) as { data?: Message[] }).data
+          if (!Array.isArray(liste)) throw new Error('liste des messages opencode sans « data »')
+          const i = liste.findIndex(m => m.id === idConsigne)
+          return i < 0 ? null : liste.slice(0, i).reverse()
+        }
+
+        const envoi = async (consigne: { text: string; files?: object[] }): Promise<Envoi> => {
+          const r = await appeler(`/api/session/${session}/prompt`, { method: 'POST', body: JSON.stringify(consigne), signal })
           const brut = await r.text()
           if (!r.ok) return { echec: echec(r.status === 429 ? 'quota' : 'cli', `HTTP ${r.status} ${brut}`) }
-          const rep = JSON.parse(brut) as { info?: any; parts?: { type: string; text?: string; synthetic?: boolean }[] }
-          if (!rep.info || !Array.isArray(rep.parts)) return { echec: echec('cli', 'réponse opencode sans « info » ou sans « parts »') }
-          const err = rep.info.error
-          if (err) {
-            const texte = `${err.name} ${err.data?.message ?? ''}`
-            if (err.data?.statusCode === 429 || estQuota(texte)) return { echec: echec('quota', texte) }
-            if (err.name === 'MessageOutputLengthError') return { echec: echec('schema', 'sortie tronquée (longueur maximale atteinte)') }
-            return { echec: echec('cli', texte) }
+          const idConsigne = (JSON.parse(brut) as { data?: { id?: string } }).data?.id
+          if (!idConsigne) return { echec: echec('cli', 'envoi accepté sans identifiant de message') }
+          auRepos = false
+          let suite: Message[]
+          for (;;) {
+            // Attente bloquante par tranches : entre deux tranches, une limite d'usage en cours de nouvelle tentative est repérée tout de suite.
+            const w = await appeler(`/api/experimental/session/${session}/wait`, { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(tranche)]) })
+              .catch((e) => { if (signal.aborted || !estDelai(e)) throw e; return null })
+            if (w && !w.ok) return { echec: echec('cli', `attente de la réponse : HTTP ${w.status} ${await w.text()}`) }
+            const apres = await messagesApres(idConsigne)
+            if (apres?.some(m => m.type === 'idle')) { suite = apres; break }
+            const tentative = apres?.filter(m => m.type === 'assistant').at(-1)?.retry?.error
+            if (tentative && (tentative.status === 429 || estQuota(`${tentative.type ?? ''} ${tentative.message ?? ''}`))) return { echec: echecErreur(tentative) }
+            if (w) await pause(PAUSE_ATTENTE_MS, signal)
           }
-          const texte = rep.parts.filter(p => p.type === 'text' && !p.synthetic).map(p => p.text ?? '').join('\n')
-          const t = rep.info.tokens ?? {}
-          const usage = { input: t.input ?? 0, output: (t.output ?? 0) + (t.reasoning ?? 0), cache_creation: t.cache?.write ?? 0, cache_read: t.cache?.read ?? 0 }
-          const modele = typeof rep.info.modelID === 'string' ? rep.info.modelID : MODELES_OPENCODE[req.modele]
+          auRepos = true
+          const repos = suite.find(m => m.type === 'idle')!
+          const reponses = suite.filter(m => m.type === 'assistant')
+          const derniere = reponses.at(-1)
+          const err = derniere?.error ?? repos.error
+          if (err) return { echec: echecErreur(err) }
+          if (repos.outcome !== 'succeeded' || !derniere) return { echec: echec('cli', `session terminée sans réponse (${repos.outcome ?? 'issue inconnue'})`) }
+          if (derniere.finish === 'length') return { echec: echec('schema', 'sortie tronquée (longueur maximale atteinte)') }
+          const usage = { input: 0, output: 0, cache_creation: 0, cache_read: 0 }
+          for (const m of reponses) {
+            const t = m.tokens ?? {}
+            usage.input += t.input ?? 0; usage.output += (t.output ?? 0) + (t.reasoning ?? 0)
+            usage.cache_creation += t.cache?.write ?? 0; usage.cache_read += t.cache?.read ?? 0
+          }
+          const texte = (derniere.content ?? []).filter(p => p.type === 'text').map(p => p.text ?? '').join('\n')
+          const modele = typeof derniere.model?.id === 'string' ? derniere.model.id : MODELES_OPENCODE[req.modele]
           let sortie: unknown
           try { sortie = extraireJson(texte) } catch (e: any) { return { modele, usage, invalide: `réponse non JSON : ${e?.message ?? e}` } }
           const invalide = validerSortie(req.schema, sortie)
           return invalide ? { modele, usage, invalide } : { modele, usage, sortie }
         }
-        const premier = await envoi(corps.parts)
+
+        const premier = await envoi(premiereConsigne(req))
         if ('echec' in premier) return premier.echec
         if (!('invalide' in premier)) return { ok: true, sortie: premier.sortie as LectureClaude, modele: premier.modele, usage: premier.usage }
         // Sortie hors schéma : UNE relance corrective dans la même session (jamais plus), les erreurs en retour.
-        const second = await envoi([{ type: 'text', text: `Ta réponse précédente ne respecte pas le schéma JSON demandé : ${premier.invalide.slice(0, ERREURS_RELANCE_MAX)}. Renvoie uniquement l'objet JSON complet et corrigé, conforme au schéma, sans texte autour.` }])
+        const second = await envoi({ text: `Ta réponse précédente ne respecte pas le schéma JSON demandé : ${premier.invalide.slice(0, ERREURS_RELANCE_MAX)}. Renvoie uniquement l'objet JSON complet et corrigé, conforme au schéma, sans texte autour.` })
         if ('echec' in second) return second.echec
         if ('invalide' in second) return echec('schema', second.invalide)
         const [u1, u2] = [premier.usage, second.usage]
@@ -99,7 +156,11 @@ export function creerLecteurOpencode(cfg: ConfigOpencode, fetchImpl: typeof fetc
         if (estDelai(e)) return echec('timeout', etape === 'lecture' ? `délai de ${delaiMs} ms dépassé` : `délai de ${DELAI_SESSION_MS} ms dépassé (${etape})`)
         return echec('cli', String(e?.message ?? e))
       } finally {
-        if (session) await appeler(`/session/${session}`, { method: 'DELETE', signal: AbortSignal.timeout(DELAI_SESSION_MS) }).catch(() => { /* session orpheline : sans conséquence, base locale de l'instance isolée */ })
+        if (session) {
+          // Exécution peut-être encore en cours (délai, limite d'usage) : interrompue avant la suppression, sans quoi Claude continuerait de répondre.
+          if (!auRepos) await appeler(`/api/session/${session}/interrupt`, { method: 'POST', signal: AbortSignal.timeout(DELAI_SESSION_MS) }).catch(() => { /* suppression tentée quand même */ })
+          await appeler(`/api/session/${session}`, { method: 'DELETE', signal: AbortSignal.timeout(DELAI_SESSION_MS) }).catch(() => { /* session orpheline : sans conséquence, base locale de l'instance isolée */ })
+        }
       }
     },
   }

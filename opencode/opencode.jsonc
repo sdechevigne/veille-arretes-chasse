@@ -1,17 +1,17 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  // Instance isolée de la veille : aucun AGENTS.md, aucun outil, aucun MCP. Seuls plugins : authentification Claude
-  // (abonnement ; version épinglée, à changer à la main après essai) et manta-accounts (rotation des sièges), copié
-  // depuis ~/.config/opencode/plugins à chaque passage.
-  "plugin": ["opencode-claude-auth@2.2.0"],
-  "share": "disabled",
-  "autoupdate": false,
-  "mcp": {},
-  "agent": {
+  // Instance isolée de la veille (opencode V2) : aucun AGENTS.md (configuration et dossier de travail propres), aucun MCP,
+  // aucun outil (agent « lecteur » qui refuse tout : opencode n'envoie alors aucun outil au modèle). Seul plugin ajouté :
+  // manta-claude-max (abonnement Claude sans clé + rotation des sièges Manta), copié depuis ~/.config/opencode/plugins à
+  // chaque passage. Ne pas mettre « steps » : à la dernière étape, opencode ajoute un message assistant final que les
+  // modèles récents refusent (« assistant message prefill »).
+  "mcp": { "servers": {} },
+  "snapshots": false,
+  "agents": {
     "lecteur": {
       "mode": "primary",
-      "prompt": "Tu lis des actes administratifs français (arrêtés de chasse) et tu rends uniquement l'objet JSON demandé.",
-      "permission": { "*": "deny" }
+      "system": "Tu lis des actes administratifs français (arrêtés de chasse) et tu rends uniquement l'objet JSON demandé.",
+      "permissions": [{ "action": "*", "resource": "*", "effect": "deny" }]
     }
   }
 }
