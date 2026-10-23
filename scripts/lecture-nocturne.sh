@@ -44,8 +44,17 @@ trap 'exit 143' TERM INT   # arrêt par systemd (délai dépassé) : passe aussi
 # coupe pas la nuit : on lit avec le code déjà présent. Dépendances réinstallées si le verrou a changé, sans script
 # d'installation (aucun code de paquet exécuté à l'installation ; tsx / esbuild fonctionnent sans, vérifié sur vm-test).
 ETAPE="mise à jour du code"
+# L'avance rapide peut réécrire CE script pendant que bash le lit (par décalage d'octets) : la suite s'exécuterait alors avec un
+# mélange d'ancienne et de nouvelle logique. Si HEAD a changé, on relance donc une fois le script (nouveau) depuis le début ;
+# VEILLE_REEXEC empêche toute boucle. Aucun effet de bord n'a eu lieu avant ce bloc (le « if » est entièrement lu avant d'être exécuté).
+avant=$(git -C "$ROBOT" rev-parse HEAD 2>/dev/null || true)
 if ! { timeout 60 git -C "$ROBOT" fetch -q origin main && git -C "$ROBOT" merge -q --ff-only origin/main; }; then
   echo "avertissement : mise à jour du code impossible, passage avec le code déjà présent" >&2
+fi
+apres=$(git -C "$ROBOT" rev-parse HEAD 2>/dev/null || true)
+if [ "$avant" != "$apres" ] && [ -z "${VEILLE_REEXEC:-}" ]; then
+  echo "code mis à jour ($avant -> $apres) : relance du script" >&2
+  VEILLE_REEXEC=1 exec "$0" "$@"
 fi
 ETAPE="installation des dépendances (npm ci)"
 mkdir -p "$ETAT"

@@ -192,6 +192,16 @@ verifie "fetch borné à 60 s" '[ "$(cat "$RACINE/appels.timeout" 2>/dev/null)" 
 verifie "avertissement" 'grep -q "mise à jour du code impossible" "$D/err"'
 verifie "lecture faite" 'grep -q "^lire-claude" "$RACINE/appels"'
 
+echo "# 5 ter. origin a un commit plus récent qui modifie le script : relance une fois, la NOUVELLE logique s'exécute, pas de boucle"
+preparer relance
+sed -i 's|^set -euo pipefail$|set -euo pipefail\necho "nouvelle logique (REEXEC=${VEILLE_REEXEC:-})" >> "$APPELS.marqueur"|' "$D/origin/scripts/lecture-nocturne.sh"
+git -C "$D/origin" -c user.name=t -c user.email=t@t commit -q -am "script modifié"
+lancer relance FAKE_LIRE=calme
+verifie "code 0" '[ "$RC" = 0 ]'
+verifie "nouvelle logique exécutée une seule fois, après relance" '[ "$(cat "$RACINE/appels.marqueur" 2>/dev/null)" = "nouvelle logique (REEXEC=1)" ]'
+verifie "relance signalée" 'grep -q "relance du script" "$D/err"'
+verifie "lecture faite une seule fois" '[ "$(grep -c "^lire-claude" "$RACINE/appels")" = 1 ]'
+
 echo "# 6. fournisseur anthropic jamais activé (plugin inopérant) : échec au bout du délai, message clair"
 preparer sansanth; echo sans-anthropic > "$D/home/fake-oc-mode"; lancer sansanth VEILLE_DELAI_PRET=3
 verifie "code 1" '[ "$RC" = 1 ]'
