@@ -324,29 +324,32 @@ describe('lireAvecClaude', () => {
     expect(p.payload.periodes.find(x => x.espece_code === 'sanglier')?.restriction_dates).toBeNull()
   })
 
-  // Image absente (pas encore produite par images-pages) : aucune décision, le document reste à lire et sera repris au passage
+  // Image absente (pas encore produite par images-pages) : vérifiée AVANT tout appel Claude (une lecture dont le C1 ne pourrait
+  // pas aboutir serait du quota perdu, nuit après nuit) ; aucune décision, le document reste à lire et sera repris au passage
   // suivant ; ce n'est ni une erreur (aucune tentative comptée) ni une proposition.
-  it('image d’une page scannée absente de R2 : aucune proposition, document laissé a_lire, compté en attente d’images', async () => {
-    const s = sortie({ periodes: [P1, { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }] })
-    const m = await monter([{ sources: ['ocr'], sansImages: true }, {}], [ok(s), ok(sortie())])
+  it('image d’une page scannée absente de R2 : aucun appel Claude, document laissé a_lire, compté en attente d’images', async () => {
+    const m = await monter([{ sources: ['ocr'], sansImages: true }, {}], [ok(sortie())])
     const stats = await m.lancer()
-    expect(m.lecteur.requetes).toHaveLength(2); expect(m.images).toEqual([])
+    expect(m.lecteur.requetes).toHaveLength(1); expect(m.images).toEqual([])
     expect(m.depot.etat.propositions.map(p => p.document_id)).toEqual(['doc-2'])
     expect(m.doc(0)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
     expect(stats).toMatchObject({ attenteImages: 1, erreurs: 0, enAttente: 0, publie: 1, traites: 1 })
     expect(m.journal).toContain('54 en attente d’images : image de la page 1 absente (à produire par images-pages), document laissé à lire')
   })
-  it('image absente après la relance Opus d’une page native : document laissé a_lire, aucune erreur comptée', async () => {
-    const PAGES = [AP[0], ART1]
-    const P2_OCR = { ...P2, preuve: preuve("à l'approche du 1er juin 2026 au 28 février 2027") }
-    const s = sortie({ periodes: [{ ...P1, preuve: preuve('peut être chassé du 1er juin 2026 au 28 février 2027', 2) }, P2_OCR] })
-    const opus = sortie({ periodes: [{ ...P1, preuve: preuve('Le sanglier peut être chassé du 1er juin 2026 au 28 février 2027', 2) }, P2_OCR] })
-    const m = await monter([{ pages: PAGES, sources: ['ocr', 'native'], sansImages: true }], [ok(s), ok(opus, 'opus')])
+  it('une seule page OCR sans image (pages natives et page en erreur d’OCR imagées) : aucun appel Claude', async () => {
+    const m = await monter([{ pages: [AP[0], ART1, ART2], sources: ['native', 'erreur', 'ocr'] }], [])
+    m.archive.objets.delete(cleImagePage('2026-2027', '54', 'a'.repeat(64), 3))
     const stats = await m.lancer()
-    expect(m.lecteur.requetes.map(r => r.modele)).toEqual(['sonnet', 'opus'])
-    expect(m.depot.etat.propositions).toEqual([])
+    expect(m.lecteur.requetes).toHaveLength(0)
     expect(m.doc(0)).toMatchObject({ statut_traitement: 'a_lire', erreur: null })
-    expect(stats).toMatchObject({ attenteImages: 1, erreurs: 0 })
+    expect(stats).toMatchObject({ attenteImages: 1, erreurs: 0, traites: 0 })
+    expect(m.journal).toContain('54 en attente d’images : image de la page 3 absente (à produire par images-pages), document laissé à lire')
+  })
+  it('ponctuel à page scannée sans image : lu quand même (aucune relecture sur image possible pour un ponctuel)', async () => {
+    const pages = ["PRÉFET DE MEURTHE-ET-MOSELLE\nARRÊTÉ N° 2026/DDT/90 autorisant une battue administrative, campagne 2026-2027\nArticle 1 : Une battue est autorisée le 3 novembre 2026.\nFait à Nancy, le 20 octobre 2026"]
+    const m = await monter([{ type: 'ponctuel', pages, sources: ['ocr'], sansImages: true }], [ok(sortie({ periodes: [] }))])
+    expect(await m.lancer()).toMatchObject({ ignores: 1, attenteImages: 0 })
+    expect(m.lecteur.requetes).toHaveLength(1)
   })
 
   it('pages illisibles signalées par Claude : page OCR relue en image même si C1 est bon ; page native ignorée', async () => {

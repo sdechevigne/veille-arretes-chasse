@@ -1,7 +1,7 @@
 // Rattrapage des images de pages scannées : documents déjà a_lire dont les pages OCR / en erreur n'ont pas encore leur PNG dans R2
 // (la lecture mécanique les dépose depuis qu'elle sait le faire ; la relecture C1 les lit sans poppler).
 import { cleImagePage, type Archive } from './r2.ts'
-import type { Depot } from './db.ts'
+import type { Depot, DocumentEnBase } from './db.ts'
 import type { OutilsPdf } from './pdf.ts'
 import type { PageTexte } from './types.ts'
 
@@ -21,6 +21,20 @@ export interface StatsImagesPages { documents: number; images: number; erreurs: 
 /** Plafond de la file lue (la file a_lire reste petite) : le filtrage des documents complets se fait côté robot. */
 const FILE_MAX = 1000
 
+/** Image d'une page scannée pas encore produite : aucune lecture Claude n'est lancée (le contrôle C1 ne pourrait pas relire la
+ *  page), le document reste à lire et sera repris au passage suivant, une fois l'image produite. Ni une erreur, ni un C1 rouge. */
+export class ImageAbsente extends Error {
+  constructor(readonly page: number) { super(`image de la page ${page} absente (à produire par images-pages)`) }
+}
+
+/** Pages scannées (OCR, ou OCR en échec) dont l'image n'est pas dans R2 : source unique de ce qui doit être produit (ici) et de
+ *  ce qui empêche la lecture Claude (garde avant tout appel). */
+export async function pagesSansImage(archive: Archive, doc: Pick<DocumentEnBase, 'saison' | 'departement' | 'sha256'>, pages: PageTexte[]): Promise<number[]> {
+  const manquantes: number[] = []
+  for (const p of pages.filter(p => p.source !== 'native')) if (!(await archive.existe(cleImagePage(doc.saison, doc.departement, doc.sha256, p.n)))) manquantes.push(p.n)
+  return manquantes
+}
+
 export async function produireImagesPages(deps: DepsImagesPages, o: OptionsImagesPages): Promise<StatsImagesPages> {
   const log = deps.log ?? (() => {}); const now = deps.now ?? (() => new Date())
   const stats: StatsImagesPages = { documents: 0, images: 0, erreurs: 0 }
@@ -32,8 +46,7 @@ export async function produireImagesPages(deps: DepsImagesPages, o: OptionsImage
     let compte = false
     try {
       const pages: PageTexte[] = JSON.parse((await deps.archive.lire(doc.texte_r2_key)).toString('utf8')).pages
-      const manquantes: number[] = []
-      for (const p of pages.filter(p => p.source !== 'native')) if (!(await deps.archive.existe(cleImagePage(doc.saison, doc.departement, doc.sha256, p.n)))) manquantes.push(p.n)
+      const manquantes = await pagesSansImage(deps.archive, doc, pages)
       if (!manquantes.length) continue
       stats.documents++; compte = true
       temp = await deps.fichierTemp(await deps.archive.lire(doc.r2_key))

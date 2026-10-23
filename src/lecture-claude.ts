@@ -9,7 +9,8 @@ import { comparerProjetSigne } from './projet.ts'
 import { validerVocabulaire, type PeriodePayload } from './payload.ts'
 import { saisonsDepuisTexte } from './saison.ts'
 import { consoliderPeriodes, deptDetecte, payloadDe, zonesNonReprises, type ModeLecture } from './consolidation.ts'
-import { controlerC1, enPanne, ImageAbsente, panne, type Lu } from './controle-c1.ts'
+import { controlerC1, enPanne, panne, type Lu } from './controle-c1.ts'
+import { ImageAbsente, pagesSansImage } from './images-pages.ts'
 import type { PeriodePubliee } from './difference.ts'
 import type { Article, PageTexte, PropositionRobot, ResultatSoumission } from './types.ts'
 
@@ -129,6 +130,12 @@ async function lireDocument(deps: DepsLectureClaude, doc: DocumentEnBase, stats:
   // Garde de taille : un dossier trop long n'est jamais envoyé (refus explicite, rejouable).
   if (d.estimationTokens > TOKENS_MAX) throw new Error(`document trop long (${d.estimationTokens} tokens estimés)`)
   if (d.sansArticles) notes.push('document sans article numéroté : texte envoyé entier')
+  // Garde avant tout appel Claude : une page scannée sans image empêcherait le C1 d'aboutir (lecture payée pour rien). Inutile
+  // sans C1 (ponctuel, raccourci projet → signé), qui ne relit jamais une page sur image.
+  if (prep.mode !== 'script_projet_signe') {
+    const sansImage = await pagesSansImage(deps.archive, doc, pages)
+    if (sansImage.length) throw new ImageAbsente(sansImage[0])
+  }
 
   // Ponctuel (E5) : seul l'objet est lu, pour l'historique ; aucune proposition.
   if (type === 'ponctuel') {

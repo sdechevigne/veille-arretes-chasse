@@ -188,17 +188,6 @@ jobs:
           R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
           VEILLE_PROXY_URL: ${{ secrets.VEILLE_PROXY_URL }}
         run: npm run veille -- lire --limite 100 --budget-min 60 | tee lecture.json
-      - name: Images des pages
-        if: steps.rythme.outputs.go == 'true'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
-        # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON.
-        run: npm run -s veille -- images-pages --limite 200 --budget-min 20 | tee images-pages.json
       - name: Santé des sources
         if: steps.rythme.outputs.go == 'true'
         env:
@@ -217,8 +206,46 @@ jobs:
           path: |
             collecte.json
             lecture.json
-            images-pages.json
             sante.json
+          retention-days: 30
+
+  # Images des pages scannées des documents a_lire : TOUS les jours, indépendamment du rythme de collecte (R2 et Supabase
+  # seulement, hors VPN). Un rattrapage coupé par son budget reprend donc le lendemain, et non au lundi suivant : la lecture
+  # Claude de la nuit ne lit pas un document tant qu'une de ses pages scannées n'a pas son image (constat du 19/10 : budget de
+  # 20 min épuisé après 19 documents sur 29, les 10 autres sans image pendant une semaine).
+  images:
+    needs: veille
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Outils PDF
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends poppler-utils
+      - name: Dépendances
+        run: npm ci
+      - name: Images des pages
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_VEILLE_BUCKET: ${{ secrets.R2_VEILLE_BUCKET }}
+        # `-s` : sans l'en-tête de npm, stdout ne porte que le JSON.
+        run: npm run -s veille -- images-pages --limite 200 --budget-min 40 | tee images-pages.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: images-pages-${{ github.run_id }}
+          path: images-pages.json
           retention-days: 30
 
   # Bilan du lundi (planifié) : notification et fichier d'état commité. Seul job autorisé à écrire dans le dépôt.

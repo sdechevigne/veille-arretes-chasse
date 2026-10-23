@@ -19,19 +19,12 @@ type Panne = Extract<ReponseLecture, { ok: false }>
 export const enPanne = (r: ReponseLecture): r is Panne => !r.ok
 export const panne = (r: Panne) => `claude ${r.erreur} : ${r.message}`
 
-/** Image d'une page à relire pas encore produite (images-pages la rattrape sur les documents a_lire) : aucune décision n'est
- *  prise, le document reste à lire et sera repris au passage suivant. Ni une erreur de lecture, ni un C1 rouge. */
-export class ImageAbsente extends Error {
-  constructor(readonly page: number) { super(`image de la page ${page} absente (à produire par images-pages)`) }
-}
-
-/** Images des pages lues dans R2 (produites par la lecture mécanique ou `images-pages`) ; première page absente sinon (rien n'est alors lu). */
-async function imagesPages(deps: DepsC1, doc: DocumentEnBase, pages: number[]): Promise<{ images: { page: number; png: Buffer }[] } | { absente: number }> {
-  const cle = (page: number) => cleImagePage(doc.saison, doc.departement, doc.sha256, page)
-  for (const page of pages) if (!(await deps.archive.existe(cle(page)))) return { absente: page }
+/** Images des pages lues dans R2 (produites par la lecture mécanique ou `images-pages`). Leur présence est vérifiée avant toute
+ *  lecture Claude (garde `pagesSansImage` de la lecture) : une image disparue entre-temps fait échouer la lecture (rejouable). */
+async function imagesPages(deps: DepsC1, doc: DocumentEnBase, pages: number[]): Promise<{ page: number; png: Buffer }[]> {
   const images: { page: number; png: Buffer }[] = []
-  for (const page of pages) images.push({ page, png: await deps.archive.lire(cle(page)) })
-  return { images }
+  for (const page of pages) images.push({ page, png: await deps.archive.lire(cleImagePage(doc.saison, doc.departement, doc.sha256, page)) })
+  return images
 }
 
 const consigneImages = (pages: number[]) =>
@@ -72,9 +65,7 @@ export async function controlerC1(deps: DepsC1, doc: DocumentEnBase, pages: Page
 
   // Lecture sur image n° 1 : identique à la lecture texte → confirmée ; sinon n° 2, qui doit concorder avec la n° 1.
   // Comparaison sur espèce, sous-type, mode et dates ; restriction et article différents ne font qu'une note.
-  const lus = await imagesPages(deps, doc, cibles)
-  if ('absente' in lus) throw new ImageAbsente(lus.absente)
-  const images = lus.images
+  const images = await imagesPages(deps, doc, cibles)
   const requete = { modele: 'sonnet' as const, texte: `${dossier.texte}\n\n${consigneImages(cibles)}`, images }
   const a = await appeler(requete)
   if (enPanne(a)) return echec(`lecture sur image impossible : ${panne(a)}`)
