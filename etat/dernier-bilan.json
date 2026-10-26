@@ -1,27 +1,34 @@
 {
-  "genereLe": "2026-10-19T10:54:56.679Z",
+  "genereLe": "2026-10-26T13:48:04.833Z",
   "periodeJours": 7,
-  "sourcesEnPanne": 4,
+  "sourcesEnPanne": 3,
   "documents7j": {
-    "total": 42,
+    "total": 133,
     "parStatut": {
-      "a_lire": 42
+      "ignore": 113,
+      "a_lire": 12,
+      "en_attente": 8
     },
     "parType": {
-      "annuel": 40,
-      "ponctuel": 1,
-      "indetermine": 1
+      "hors_sujet": 109,
+      "ponctuel": 4,
+      "indetermine": 15,
+      "modificatif": 4,
+      "annuel": 1
     }
   },
   "propositions7j": {
-    "total": 0,
-    "parDecision": {}
+    "total": 34,
+    "parDecision": {
+      "en_attente": 33,
+      "publie_note": 1
+    }
   },
   "tokens7j": {
-    "input": 0,
-    "output": 0,
-    "cache_creation": 0,
-    "cache_read": 0
+    "input": 67212,
+    "output": 1093683,
+    "cache_creation": 1051973,
+    "cache_read": 339386
   },
   "deferes": [
     "couverture des départements sans arrêté annuel en campagne (1er juin / 15 juillet)"
