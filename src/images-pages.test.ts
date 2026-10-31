@@ -49,6 +49,17 @@ describe('produireImagesPages', () => {
     expect(m.rendues).toEqual([2, 3])
   })
 
+  it('même file que lire-claude : erreur « lecture claude : » relisible incluse ; erreur sans ce préfixe et en_attente ignorées', async () => {
+    const m = await monter(3)
+    Object.assign(m.depot.etat.documents[0], { statut_traitement: 'erreur', erreur: 'lecture claude : boum (tentative 1)', updated_at: '2026-10-10T00:00:00Z' })
+    Object.assign(m.depot.etat.documents[1], { statut_traitement: 'erreur', erreur: 'pdfinfo cassé', updated_at: '2026-10-10T00:00:00Z' })
+    Object.assign(m.depot.etat.documents[2], { statut_traitement: 'en_attente', erreur: null })
+    expect(await m.lancer()).toEqual({ documents: 1, images: 1, erreurs: 0, sortis: 0 })
+    expect(m.archive.objets.get(cleImagePage(SAISON, '54', m.shas[0], 1))).toEqual(Buffer.from('png1'))
+    expect(m.archive.objets.has(cleImagePage(SAISON, '54', m.shas[1], 1))).toBe(false)
+    expect(m.archive.objets.has(cleImagePage(SAISON, '54', m.shas[2], 1))).toBe(false)
+  })
+
   it('--limite : compte les documents traités, pas ceux déjà complets', async () => {
     const m = await monter(3)
     m.archive.objets.set(cleImagePage(SAISON, '54', m.shas[0], 1), Buffer.from('deja'))

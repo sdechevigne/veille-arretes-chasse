@@ -47,7 +47,7 @@ const causeAbregee = (message: string) => (message.split('\n')[0] || 'cause inco
 export async function produireImagesPages(deps: DepsImagesPages, o: OptionsImagesPages): Promise<StatsImagesPages> {
   const log = deps.log ?? (() => {}); const now = deps.now ?? (() => new Date())
   const stats: StatsImagesPages = { documents: 0, images: 0, erreurs: 0, sortis: 0 }
-  for (const doc of await deps.depot.documentsParStatut('a_lire', FILE_MAX)) {
+  for (const doc of await deps.depot.documentsALire(FILE_MAX, now())) {
     if (stats.documents >= o.limite) break
     if (o.echeance && now() >= o.echeance) { log('échéance atteinte : images de pages interrompues'); break }
     if (!doc.texte_r2_key) continue
